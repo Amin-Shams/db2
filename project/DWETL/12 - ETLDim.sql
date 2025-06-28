@@ -976,3 +976,473 @@ BEGIN
 END;
 GO
 
+
+
+USE DataWarehouse;
+GO
+
+--------------------------------------------------------------------------------
+-- 2-1) UpdateDimDateIncremental
+-- Incremental populate of Dim.DimDate: only new dates from yesterday+1 through today
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.UpdateDimDateIncremental
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimDate',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @LastDate  DATE,
+        @StartDate DATE,
+        @EndDate   DATE = CONVERT(DATE, GETDATE()),
+        @DayCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- 1. Find last existing date
+        SELECT @LastDate = MAX(FullDate) FROM Dim.DimDate;
+        IF @LastDate IS NULL
+            SET @LastDate = DATEADD(DAY, -1, @EndDate);
+
+        SET @StartDate = DATEADD(DAY, 1, @LastDate);
+        SET @DayCount  = DATEDIFF(DAY, @StartDate, @EndDate) + 1;
+
+        IF @DayCount > 0
+        BEGIN
+            -- 2. Generate new dates and insert
+            SET @StepStart = GETDATE();
+            ;WITH NewDates AS
+            (
+                SELECT TOP(@DayCount)
+                    DATEADD(DAY, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @StartDate) AS FullDate
+                FROM sys.all_objects a
+                CROSS JOIN sys.all_objects b
+            )
+            INSERT INTO Dim.DimDate
+            (
+                FullDate, [Year], [Quarter], [Month], MonthName,
+                [Day], DayOfWeek, DayName, WeekOfYear, IsWeekend
+            )
+            SELECT
+                d.FullDate,
+                YEAR(d.FullDate),
+                DATEPART(QUARTER, d.FullDate),
+                MONTH(d.FullDate),
+                DATENAME(MONTH, d.FullDate),
+                DAY(d.FullDate),
+                DATEPART(WEEKDAY, d.FullDate),
+                DATENAME(WEEKDAY, d.FullDate),
+                DATEPART(WEEK, d.FullDate),
+                CASE WHEN DATEPART(WEEKDAY, d.FullDate) IN (6,7) THEN 1 ELSE 0 END
+            FROM NewDates AS d
+            ORDER BY d.FullDate;
+
+            SET @StepEnd = GETDATE();
+            INSERT INTO dbo.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES
+            (
+                @TableName,
+                'Insert',
+                @StepStart,
+                @StepEnd,
+                CONCAT('Incremental: Inserted ', @@ROWCOUNT, ' new dates')
+            );
+        END
+        ELSE
+        BEGIN
+            -- nothing to do
+            SET @StepStart = GETDATE();
+            SET @StepEnd   = GETDATE();
+            INSERT INTO dbo.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES
+            (
+                @TableName,
+                'Skip',
+                @StepStart,
+                @StepEnd,
+                'Incremental: No new dates found'
+            );
+        END
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() <> 0 ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Msg     = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog
+        (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+        (
+            @TableName,
+            'Error',
+            @StepStart,
+            @StepEnd,
+            CONCAT('Incremental: ', @Msg)
+        );
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+CREATE OR ALTER PROCEDURE Dim.UpdateDimShipIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimShip',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @Today     DATE = CONVERT(DATE,GETDATE()),
+        @RowsExp   INT,
+        @RowsIns   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ----------------------------------------------------------------
+        -- 1) Expire current rows when any tracked attribute changes
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        UPDATE D
+        SET 
+            D.EffectiveTo = @Today,
+            D.IsCurrent   = 0
+        FROM Dim.DimShip AS D
+        JOIN StagingDB.PortOperations.Ship AS S
+          ON D.ShipID = S.ShipID
+        WHERE D.IsCurrent = 1
+          AND (
+               ISNULL(D.IMO_Number,'') <> ISNULL(S.IMO_Number,'')
+            OR ISNULL(D.Name,'')       <> ISNULL(S.Name,'')
+            OR ISNULL(D.CountryID,0)   <> ISNULL(S.CountryID,0)
+          );
+        SET @RowsExp = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog (TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Expire',@StepStart,@StepEnd,
+               CONCAT('Expired ',@RowsExp,' old Ship rows'));
+
+        ----------------------------------------------------------------
+        -- 2) Insert new versions for changed or brand‐new keys
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimShip
+           (ShipID,IMO_Number,Name,CountryID,EffectiveFrom,EffectiveTo,IsCurrent)
+        SELECT
+           S.ShipID,
+           S.IMO_Number,
+           S.Name,
+           S.CountryID,
+           @Today,
+           NULL,
+           1
+        FROM StagingDB.PortOperations.Ship AS S
+        LEFT JOIN Dim.DimShip AS D
+          ON S.ShipID = D.ShipID AND D.IsCurrent = 1
+        WHERE D.ShipSK IS NULL  -- new ship
+           OR ISNULL(D.IMO_Number,'') <> S.IMO_Number
+           OR ISNULL(D.Name,'')       <> S.Name
+           OR ISNULL(D.CountryID,0)   <> S.CountryID;
+        SET @RowsIns = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd,
+           CONCAT('Inserted ',@RowsIns,' new Ship rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Msg = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',NULL,GETDATE(),@Msg);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+CREATE OR ALTER PROCEDURE Dim.UpdateDimPortIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimPort',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @RowsUpd   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ----------------------------------------------------------------
+        -- Update Name/Location by natural key PortID
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        UPDATE P
+        SET 
+            P.Name     = S.Name,
+            P.Location = S.Location
+        FROM Dim.DimPort AS P
+        JOIN StagingDB.PortOperations.Port AS S
+          ON P.PortID = S.PortID
+        WHERE ISNULL(P.Name,'')     <> ISNULL(S.Name,'')
+           OR ISNULL(P.Location,'') <> ISNULL(S.Location,'');
+        SET @RowsUpd = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Update',@StepStart,@StepEnd,
+           CONCAT('Updated ',@RowsUpd,' Port rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Msg = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',NULL,GETDATE(),@Msg);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+CREATE OR ALTER PROCEDURE Dim.UpdateDimContainerIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimContainer',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @Today     DATE = CONVERT(DATE,GETDATE()),
+        @RowsUpd   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ----------------------------------------------------------------
+        -- If OwnerCompany changed, shift Current→Original and overwrite Current
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        UPDATE C
+        SET 
+            C.Original_OwnerCompany = C.Current_OwnerCompany,
+            C.Current_OwnerCompany  = S.OwnerCompany,
+            C.EffectiveDate         = @Today
+        FROM Dim.DimContainer AS C
+        JOIN StagingDB.PortOperations.Container AS S
+          ON C.ContainerID = S.ContainerID
+        WHERE ISNULL(C.Current_OwnerCompany,'') <> ISNULL(S.OwnerCompany,'');
+        SET @RowsUpd = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Update',@StepStart,@StepEnd,
+           CONCAT('Updated ',@RowsUpd,' Container owners'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Msg = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',NULL,GETDATE(),@Msg);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+
+USE DataWarehouse;
+GO
+
+CREATE OR ALTER PROCEDURE Dim.UpdateDimEquipmentIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimEquipment',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @RowsUpd   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ----------------------------------------------------------------
+        -- Overwrite Model or EquipmentTypeID if changed
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        UPDATE E
+        SET 
+            E.EquipmentTypeID = S.EquipmentTypeID,
+            E.Model           = S.Model
+        FROM Dim.DimEquipment AS E
+        JOIN StagingDB.PortOperations.Equipment AS S
+          ON E.EquipmentID = S.EquipmentID
+        WHERE ISNULL(E.EquipmentTypeID,0) <> S.EquipmentTypeID
+           OR ISNULL(E.Model,'')         <> S.Model;
+        SET @RowsUpd = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Update',@StepStart,@StepEnd,
+           CONCAT('Updated ',@RowsUpd,' Equipment rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Msg = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',NULL,GETDATE(),@Msg);
+        THROW;
+    END CATCH;
+END;
+GO
+
+CREATE OR ALTER PROCEDURE Dim.UpdateDimEmployeeIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimEmployee',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @Today     DATE = CONVERT(DATE,GETDATE()),
+        @RowsExp   INT,
+        @RowsIns   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ----------------------------------------------------------------
+        -- 1) Expire on change of tracked columns
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        UPDATE D
+        SET 
+            D.EffectiveTo = @Today,
+            D.IsCurrent   = 0
+        FROM Dim.DimEmployee AS D
+        JOIN StagingDB.HumanResources.Employee AS S
+          ON D.EmployeeID = S.EmployeeID
+        WHERE D.IsCurrent = 1
+          AND (
+               ISNULL(D.FullName,'')    <> S.FullName
+            OR ISNULL(D.Position,'')    <> S.Position
+            OR ISNULL(D.NationalID,'')  <> S.NationalID
+            OR ISNULL(D.HireDate,'19000101') <> S.HireDate
+            OR ISNULL(D.EmploymentStatus,'') <> S.EmploymentStatus
+          );
+        SET @RowsExp = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Expire',@StepStart,@StepEnd,
+           CONCAT('Expired ',@RowsExp,' Employee rows'));
+
+        ----------------------------------------------------------------
+        -- 2) Insert new versions
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimEmployee
+           (EmployeeID,FullName,Position,NationalID,HireDate,
+            BirthDate,Gender,MaritalStatus,Address,Phone,Email,
+            EmploymentStatus,EffectiveFrom,EffectiveTo,IsCurrent)
+        SELECT
+           S.EmployeeID,S.FullName,S.Position,S.NationalID,S.HireDate,
+           S.BirthDate,S.Gender,S.MaritalStatus,S.Address,S.Phone,S.Email,
+           S.EmploymentStatus,@Today,NULL,1
+        FROM StagingDB.HumanResources.Employee AS S
+        LEFT JOIN Dim.DimEmployee AS D
+          ON S.EmployeeID = D.EmployeeID AND D.IsCurrent=1
+        WHERE D.EmployeeSK IS NULL
+           OR ISNULL(D.FullName,'')    <> S.FullName
+           OR ISNULL(D.Position,'')    <> S.Position
+           OR ISNULL(D.NationalID,'')  <> S.NationalID
+           OR ISNULL(D.HireDate,'19000101') <> S.HireDate
+           OR ISNULL(D.EmploymentStatus,'') <> S.EmploymentStatus;
+        SET @RowsIns = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd,
+           CONCAT('Inserted ',@RowsIns,' new Employee rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Msg = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',NULL,GETDATE(),@Msg);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+CREATE OR ALTER PROCEDURE Dim.UpdateDimYardSlotIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Dim.DimYardSlot',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Msg       NVARCHAR(2000),
+        @RowsUpd   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ----------------------------------------------------------------
+        -- Overwrite attributes if anything changed
+        ----------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        UPDATE Y
+        SET 
+            Y.YardID    = S.YardID,
+            Y.[Block]   = S.[Block],
+            Y.RowNumber = S.RowNumber,
+            Y.TierLevel = S.TierLevel
+        FROM Dim.DimYardSlot AS Y
+        JOIN StagingDB.PortOperations.YardSlot AS S
+          ON Y.YardSlotID = S.YardSlotID
+        WHERE ISNULL(Y.YardID,0)    <> S.YardID
+           OR ISNULL(Y.[Block],'')   <> S.[Block]
+           OR ISNULL(Y.RowNumber,0)  <> S.RowNumber
+           OR ISNULL(Y.TierLevel,0)  <> S.TierLevel;
+        SET @RowsUpd = @@ROWCOUNT;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Update',@StepStart,@StepEnd,
+           CONCAT('Updated ',@RowsUpd,' YardSlot rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Msg = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',NULL,GETDATE(),@Msg);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
