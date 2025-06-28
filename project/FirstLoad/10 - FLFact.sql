@@ -980,3 +980,411 @@ END;
 GO
 */
 
+
+
+USE DataWarehouse;
+GO
+--------------------------------------------------------------------------------
+-- 2.1) LoadFactCargoOperationInitialLoad
+-- Full initial populate of Fact.FactCargoOperationTransactional
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Fact.LoadFactCargoOperationInitialLoad
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE 
+      @TableName NVARCHAR(128) = 'Fact.FactCargoOperationTransactional',
+      @StepStart DATETIME,
+      @StepEnd   DATETIME,
+      @Message   NVARCHAR(2000),
+      @NullCount INT,
+      @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: Clear target and reseed
+        SET @StepStart = GETDATE();
+        DELETE FROM fact.FactCargoOperationTransactional;
+        DBCC CHECKIDENT('fact.FactCargoOperationTransactional', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Cleared fact');
+
+        -- STEP 2: Validate source
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM StagingDB.PortOperations.CargoOperation AS co
+        WHERE co.CargoOpID        IS NULL
+           OR co.PortCallID       IS NULL
+           OR co.ContainerID      IS NULL
+           OR co.OperationType    IS NULL
+           OR co.OperationDateTime IS NULL;
+        IF @NullCount>0 THROW 70000,'Validation failed: NULLs in CargoOperation',1;
+
+        SELECT @DupCount = COUNT(*)
+        FROM (
+          SELECT CargoOpID, COUNT(*) AS Cnt
+          FROM StagingDB.PortOperations.CargoOperation
+          GROUP BY CargoOpID
+          HAVING COUNT(*)>1
+        ) AS d;
+        IF @DupCount>0 THROW 70001,'Validation failed: Duplicates in CargoOperation',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd,
+           CONCAT('FirstLoad: Null=',@NullCount,',Dup=',@DupCount));
+
+        -- STEP 3: Insert with lookups including Equipment & Employee
+        SET @StepStart = GETDATE();
+        INSERT INTO fact.FactCargoOperationTransactional
+          (DateKey,FullDate,ShipSK, PortSK, ContainerSK, EquipmentSK, EmployeeSK,
+           OperationType, Quantity, WeightKG, OperationDateTime)
+        SELECT
+          dd.DimDateID,
+		  dd.FullDate,
+          ds.ShipSK,
+          dp.PortSK,
+          dc.ContainerSK,
+          deq.EquipmentSK,
+          dem.EmployeeSK,
+          co.OperationType,
+          co.Quantity,
+          co.WeightKG,
+          co.OperationDateTime
+        FROM StagingDB.PortOperations.CargoOperation AS co
+        JOIN StagingDB.PortOperations.PortCall     AS pc
+          ON co.PortCallID = pc.PortCallID
+        JOIN StagingDB.PortOperations.Voyage       AS v
+          ON pc.VoyageID = v.VoyageID
+        JOIN dim.DimShip                           AS ds
+          ON v.ShipID = ds.ShipID
+        JOIN dim.DimPort                           AS dp
+          ON pc.PortID = dp.PortID
+        JOIN dim.DimContainer                      AS dc
+          ON co.ContainerID = dc.ContainerID
+        JOIN StagingDB.Common.OperationEquipmentAssignment AS oea
+          ON co.CargoOpID = oea.CargoOpID
+        JOIN StagingDB.PortOperations.Equipment    AS e
+          ON oea.EquipmentID = e.EquipmentID
+        JOIN dim.DimEquipment                     AS deq
+          ON e.EquipmentID = deq.EquipmentID
+        JOIN StagingDB.HumanResources.Employee    AS emp
+          ON oea.EmployeeID = emp.EmployeeID
+        JOIN dim.DimEmployee                      AS dem
+          ON emp.EmployeeID = dem.EmployeeID
+        JOIN dim.DimDate                           AS dd
+          ON CAST(co.OperationDateTime AS DATE) = dd.FullDate;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd,
+           CONCAT('FirstLoad: Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName,'Error',@StepStart,GETDATE(),CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+--------------------------------------------------------------------------------
+-- 2.2) LoadFactPortCallSnapshotInitialLoad
+-- Full initial populate of Fact.FactPortCallPeriodicSnapshot
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Fact.LoadFactPortCallSnapshotInitialLoad
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE 
+      @TableName NVARCHAR(128) = 'Fact.FactPortCallPeriodicSnapshot',
+      @StepStart DATETIME,
+      @StepEnd   DATETIME,
+      @Message   NVARCHAR(2000);
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: Clear target and reseed
+        SET @StepStart=GETDATE();
+        DELETE FROM Fact.FactPortCallPeriodicSnapshot;
+        DBCC CHECKIDENT('Fact.FactPortCallPeriodicSnapshot',RESEED,0);
+        SET @StepEnd=GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Cleared fact');
+
+		-- STEP 2: Build snapshot per PortCall × Berth × Date
+		SET @StepStart = GETDATE();
+
+		INSERT INTO Fact.FactPortCallPeriodicSnapshot
+		  (DateKey,FullDate, PortCallID, VoyageID, PortSK, BerthID, Status, AllocationCount, TotalOps)
+		SELECT
+		  ddate.DimDateID,
+		  ddate.FullDate,
+		  pc.PortCallID,
+		  pc.VoyageID,
+		  dp.PortSK,
+		  ba.BerthID,
+		  pc.Status,
+		  COUNT(DISTINCT ba.AllocationID),
+		  COUNT(DISTINCT co.CargoOpID)
+		FROM StagingDB.PortOperations.PortCall AS pc
+		JOIN Dim.DimDate AS ddate 
+		  ON CAST(pc.ArrivalDateTime AS DATE) = ddate.FullDate
+		JOIN Dim.DimPort AS dp 
+		  ON pc.PortID = dp.PortID
+		LEFT JOIN StagingDB.PortOperations.BerthAllocation AS ba
+		  ON pc.PortCallID = ba.PortCallID
+		LEFT JOIN StagingDB.PortOperations.CargoOperation AS co
+		  ON pc.PortCallID = co.PortCallID   -- فقط بر اساس PortCallID
+		GROUP BY
+		  ddate.DimDateID,
+		  ddate.FullDate,
+		  pc.PortCallID,
+		  pc.VoyageID,
+		  dp.PortSK,
+		  ba.BerthID,
+		  pc.Status;
+
+		SET @StepEnd = GETDATE();
+
+		INSERT INTO dbo.ETLLog
+		  (TableName, OperationType, StartTime, EndTime, Message)
+		VALUES
+		  (@TableName, 'Insert', @StepStart, @StepEnd,
+		   CONCAT('FirstLoad: Inserted ', @@ROWCOUNT, ' rows'));
+
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @Message=ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName,'Error',@StepStart,GETDATE(),CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+USE DataWarehouse;
+GO
+
+--------------------------------------------------------------------------------
+-- 2.3) LoadFactContainerMovementsAccInitialLoad
+-- Full initial populate of Fact.FactContainerMovementsAcc (Accumulating Fact)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Fact.LoadFactContainerMovementsAccInitialLoad
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName  NVARCHAR(128) = 'Fact.FactContainerMovementsAcc',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        --------------------------------------------------------------------
+        -- STEP 1: Clear target and reseed identity
+        --------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Fact.FactContainerMovementsAcc;
+        DBCC CHECKIDENT('Fact.FactContainerMovementsAcc', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Delete', @StepStart, @StepEnd, 'FirstLoad: Cleared Accumulating fact');
+
+        --------------------------------------------------------------------
+        -- STEP 2: Validate staging for required fields
+        --------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM StagingDB.PortOperations.CargoOperation AS co
+        LEFT JOIN StagingDB.PortOperations.PortCall AS pc
+          ON co.PortCallID = pc.PortCallID
+        LEFT JOIN StagingDB.PortOperations.Container AS c
+          ON co.ContainerID = c.ContainerID
+        WHERE co.CargoOpID      IS NULL
+           OR co.OperationType  IS NULL
+           OR co.Quantity       IS NULL
+           OR pc.PortID         IS NULL
+           OR c.ContainerTypeID IS NULL;
+        IF @NullCount > 0
+            THROW 72000, 'Validation failed: NULLs in staging CargoOperation/related tables', 1;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Validate', @StepStart, @StepEnd,
+           CONCAT('FirstLoad: Found ', @NullCount, ' nulls in source data'));
+
+        --------------------------------------------------------------------
+        -- STEP 3: Insert aggregated metrics
+        --------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Fact.FactContainerMovementsAcc
+          (PortSK, ContainerTypeID, TotalLoads, TotalUnloads, TotalTEU)
+        SELECT
+          dp.PortSK,
+          c.ContainerTypeID,
+          SUM(CASE WHEN co.OperationType = 'LOAD'   THEN co.Quantity ELSE 0 END) AS TotalLoads,
+          SUM(CASE WHEN co.OperationType = 'UNLOAD' THEN co.Quantity ELSE 0 END) AS TotalUnloads,
+          SUM(CASE WHEN co.OperationType = 'LOAD'   THEN co.Quantity ELSE 0 END) AS TotalTEU
+        FROM StagingDB.PortOperations.CargoOperation AS co
+        JOIN StagingDB.PortOperations.PortCall     AS pc  ON co.PortCallID  = pc.PortCallID
+        JOIN StagingDB.PortOperations.Container    AS c   ON co.ContainerID = c.ContainerID
+        JOIN Dim.DimPort                           AS dp  ON pc.PortID      = dp.PortID
+        GROUP BY
+          dp.PortSK,
+          c.ContainerTypeID;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Insert', @StepStart, @StepEnd,
+           CONCAT('FirstLoad: Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() <> 0 ROLLBACK;
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Error', @StepStart, GETDATE(), CONCAT('FirstLoad: ', @Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- 2.4) LoadFactEquipmentAssignmentInitialLoad
+-- Full initial populate of Fact.FactEquipmentAssignment (Factless)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Fact.LoadFactEquipmentAssignmentInitialLoad
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128) = 'Fact.FactEquipmentAssignment',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        --------------------------------------------------------------------
+        -- STEP 1: Clear target and reseed identity
+        --------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Fact.FactEquipmentAssignment;
+        DBCC CHECKIDENT('Fact.FactEquipmentAssignment', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Delete', @StepStart, @StepEnd, 'FirstLoad: Cleared factless fact');
+
+        --------------------------------------------------------------------
+        -- STEP 2: Validate staging for required fields & duplicates
+        --------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM StagingDB.Common.OperationEquipmentAssignment AS o
+        WHERE o.AssignmentID IS NULL
+           OR o.CargoOpID    IS NULL
+           OR o.EquipmentID  IS NULL
+           OR o.EmployeeID   IS NULL
+           OR o.StartTime    IS NULL;
+        IF @NullCount > 0
+            THROW 73000, 'Validation failed: NULLs in staging OperationEquipmentAssignment', 1;
+
+        SELECT @DupCount = COUNT(*)
+        FROM (
+          SELECT AssignmentID, COUNT(*) AS Cnt
+          FROM StagingDB.Common.OperationEquipmentAssignment
+          GROUP BY AssignmentID
+          HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 73001, 'Validation failed: Duplicate AssignmentID in staging', 1;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Validate', @StepStart, @StepEnd,
+           CONCAT('FirstLoad: Nulls=', @NullCount, ',Dup=', @DupCount));
+
+        --------------------------------------------------------------------
+        -- STEP 3: Insert factless records with lookups
+        --------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Fact.FactEquipmentAssignment
+          (DateKey, EquipmentSK, EmployeeSK, PortSK, ContainerTypeID)
+        SELECT
+          ddate.DimDateID,
+          deq.EquipmentSK,
+          dem.EmployeeSK,
+          dp.PortSK,
+          dc.ContainerTypeID
+        FROM StagingDB.Common.OperationEquipmentAssignment AS o
+        JOIN StagingDB.PortOperations.CargoOperation AS co
+          ON o.CargoOpID = co.CargoOpID
+        JOIN StagingDB.PortOperations.PortCall     AS pc
+          ON co.PortCallID = pc.PortCallID
+        JOIN Dim.DimDate       AS ddate
+          ON CAST(o.StartTime AS DATE) = ddate.FullDate
+        JOIN Dim.DimEquipment   AS deq
+          ON o.EquipmentID = deq.EquipmentID
+        JOIN Dim.DimEmployee    AS dem
+          ON o.EmployeeID  = dem.EmployeeID
+        JOIN Dim.DimPort        AS dp
+          ON pc.PortID = dp.PortID
+        JOIN Dim.DimContainer   AS dc
+          ON co.ContainerID = dc.ContainerID;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Insert', @StepStart, @StepEnd,
+           CONCAT('FirstLoad: Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() <> 0 ROLLBACK;
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Error', @StepStart, GETDATE(), CONCAT('FirstLoad: ', @Message));
+        THROW;
+    END CATCH;
+END;
+GO
