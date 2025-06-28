@@ -1201,3 +1201,1186 @@ BEGIN
     END CATCH
 END;
 GO
+
+
+
+USE StagingDB;
+go
+
+
+CREATE OR ALTER PROCEDURE PortOperations.LoadContainerType
+AS
+BEGIN
+    DECLARE 
+      @TableName    NVARCHAR(128) = 'StagingDB.PortOperations.ContainerType',
+      @StepStart    DATETIME,
+      @StepEnd      DATETIME,
+      @Message      NVARCHAR(2000),
+      @NullCount    INT,
+      @DupCount     INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- 1) TRUNCATE
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE StagingDB.PortOperations.ContainerType;
+        SET @StepEnd = GETDATE();
+        INSERT INTO StagingDB.PortOperations.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+         VALUES(@TableName,'Truncate',@StepStart,@StepEnd,'Truncated ContainerType');
+
+        -- 2) VALIDATE (NULL)
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.ContainerType AS src
+        WHERE src.ContainerTypeID IS NULL
+           OR src.Description       IS NULL OR src.Description = ''
+           OR src.MaxWeightKG       IS NULL OR src.MaxWeightKG = '';
+        IF @NullCount > 0
+            THROW 51000, 'Validation failed: NULLs in ContainerType', 1;
+
+        -- 3) VALIDATE (Duplicates)
+        SELECT @DupCount = COUNT(*) 
+        FROM (
+            SELECT ContainerTypeID 
+            FROM TradePortDB.PortOperations.ContainerType
+            GROUP BY ContainerTypeID
+            HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 51001, 'Validation failed: Duplicates in ContainerType', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO StagingDB.PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd,CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        -- 4) INSERT
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.ContainerType
+          (ContainerTypeID, Description, MaxWeightKG)
+        SELECT
+          ContainerTypeID, Description, MaxWeightKG
+        FROM TradePortDB.PortOperations.ContainerType;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd,CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+CREATE OR ALTER PROCEDURE PortOperations.LoadEquipmentType
+AS
+BEGIN
+    DECLARE
+        @TableName NVARCHAR(128) = 'StagingDB.PortOperations.EquipmentType',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: TRUNCATE TARGET
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.EquipmentType;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Truncate', @StepStart, @StepEnd, 'Truncated EquipmentType');
+
+        -- STEP 2: VALIDATE SOURCE NULLS
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM TradePortDB.PortOperations.EquipmentType AS src
+        WHERE src.EquipmentTypeID IS NULL
+           OR src.Description     IS NULL OR src.Description = '';
+        IF @NullCount > 0
+            THROW 51000, 'Validation failed: NULLs in EquipmentType', 1;
+
+        -- STEP 3: VALIDATE DUPLICATES
+        SELECT @DupCount = COUNT(*)
+        FROM (
+            SELECT EquipmentTypeID
+            FROM TradePortDB.PortOperations.EquipmentType
+            GROUP BY EquipmentTypeID
+            HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 51001, 'Validation failed: Duplicates in EquipmentType', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Validate', @StepStart, @StepEnd,
+                   CONCAT('Null=', @NullCount, ', Dup=', @DupCount));
+
+        -- STEP 4: INSERT DATA
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.EquipmentType
+            (EquipmentTypeID, Description)
+        SELECT
+            EquipmentTypeID,
+            Description
+        FROM TradePortDB.PortOperations.EquipmentType;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Insert', @StepStart, @StepEnd,
+                   CONCAT('Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Error', @StepStart, @StepEnd, @Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+CREATE OR ALTER PROCEDURE PortOperations.LoadPort
+AS
+BEGIN
+    DECLARE
+        @TableName NVARCHAR(128) = 'StagingDB.PortOperations.Port',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: TRUNCATE TARGET
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Port;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Truncate', @StepStart, @StepEnd, 'Truncated Port');
+
+        -- STEP 2: VALIDATE SOURCE NULLS
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM TradePortDB.PortOperations.Port AS src
+        WHERE src.PortID   IS NULL
+           OR src.Name     IS NULL OR src.Name ='';
+        IF @NullCount > 0
+            THROW 51000, 'Validation failed: NULLs in Port', 1;
+
+        -- STEP 3: VALIDATE DUPLICATES
+        SELECT @DupCount = COUNT(*)
+        FROM (
+            SELECT PortID
+            FROM TradePortDB.PortOperations.Port
+            GROUP BY PortID
+            HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 51001, 'Validation failed: Duplicates in Port', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Validate', @StepStart, @StepEnd,
+                   CONCAT('Null=', @NullCount, ', Dup=', @DupCount));
+
+        -- STEP 4: INSERT DATA
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Port
+            (PortID, Name, Location)
+        SELECT
+            PortID,
+            Name,
+            Location
+        FROM TradePortDB.PortOperations.Port;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Insert', @StepStart, @StepEnd,
+                   CONCAT('Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Error', @StepStart, @StepEnd, @Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+CREATE OR ALTER PROCEDURE PortOperations.LoadShip
+AS
+BEGIN
+    DECLARE
+        @TableName NVARCHAR(128) = 'StagingDB.PortOperations.Ship',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: TRUNCATE TARGET
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Ship;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Truncate', @StepStart, @StepEnd, 'Truncated Ship');
+
+        -- STEP 2: VALIDATE SOURCE NULLS
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM TradePortDB.PortOperations.Ship AS src
+        WHERE src.ShipID     IS NULL
+           OR src.IMO_Number IS NULL OR src.IMO_Number=''
+           OR src.Name       IS NULL OR src.Name='';
+        IF @NullCount > 0
+            THROW 51000, 'Validation failed: NULLs in Ship', 1;
+
+        -- STEP 3: VALIDATE DUPLICATES
+        SELECT @DupCount = COUNT(*)
+        FROM (
+            SELECT ShipID
+            FROM TradePortDB.PortOperations.Ship
+            GROUP BY ShipID
+            HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 51001, 'Validation failed: Duplicates in Ship', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Validate', @StepStart, @StepEnd,
+                   CONCAT('Null=', @NullCount, ', Dup=', @DupCount));
+
+        -- STEP 4: INSERT DATA
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Ship
+            (ShipID, IMO_Number, Name, CountryID)
+        SELECT
+            ShipID,
+            IMO_Number,
+            Name,
+            CountryID
+        FROM TradePortDB.PortOperations.Ship;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Insert', @StepStart, @StepEnd,
+                   CONCAT('Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+            VALUES(@TableName, 'Error', @StepStart, @StepEnd, @Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+
+CREATE OR ALTER PROCEDURE PortOperations.LoadContainerYardMovement
+AS
+BEGIN
+    DECLARE
+        @TableName NVARCHAR(128) = 'PortOperations.ContainerYardMovement',
+        @StepStart DATETIME, @StepEnd DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT, @DupCount INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.ContainerYardMovement;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated ContainerYardMovement');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.ContainerYardMovement src
+        WHERE src.MovementID       IS NULL
+           OR src.ContainerID      IS NULL
+           OR src.YardSlotID       IS NULL
+           OR src.MovementType     IS NULL OR src.MovementType=''
+           OR src.MovementDateTime IS NULL OR src.MovementDateTime='';
+        IF @NullCount > 0 THROW 51000,'NULLs in ContainerYardMovement',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (
+          SELECT MovementID 
+          FROM TradePortDB.PortOperations.ContainerYardMovement
+          GROUP BY MovementID
+          HAVING COUNT(*)>1
+        ) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in ContainerYardMovement',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.ContainerYardMovement
+          (MovementID,ContainerID,YardSlotID,MovementType,MovementDateTime)
+        SELECT MovementID,ContainerID,YardSlotID,MovementType,MovementDateTime
+        FROM TradePortDB.PortOperations.ContainerYardMovement;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+
+
+CREATE OR ALTER PROCEDURE PortOperations.LoadCargoOperation
+AS
+BEGIN
+    DECLARE
+        @TableName NVARCHAR(128) = 'PortOperations.CargoOperation',
+        @StepStart DATETIME, @StepEnd DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT, @DupCount INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.CargoOperation;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated CargoOperation');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.CargoOperation src
+        WHERE src.CargoOpID        IS NULL
+           OR src.PortCallID       IS NULL
+           OR src.ContainerID      IS NULL
+           OR src.OperationType    IS NULL OR src.OperationType=''
+           OR src.OperationDateTime IS NULL OR src.OperationDateTime=''
+		   OR src.Quantity IS NULL OR src.Quantity=''
+		   OR src.WeightKG IS NULL OR src.WeightKG='';
+        IF @NullCount > 0 THROW 51000,'NULLs in CargoOperation',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (
+          SELECT CargoOpID 
+          FROM TradePortDB.PortOperations.CargoOperation
+          GROUP BY CargoOpID
+          HAVING COUNT(*)>1
+        ) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in CargoOperation',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.CargoOperation
+          (CargoOpID,PortCallID,ContainerID,OperationType,OperationDateTime,Quantity,WeightKG)
+        SELECT CargoOpID,PortCallID,ContainerID,OperationType,OperationDateTime,Quantity,WeightKG
+        FROM TradePortDB.PortOperations.CargoOperation;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+
+CREATE OR ALTER PROCEDURE Common.LoadOperationEquipmentAssignment
+AS
+BEGIN
+    DECLARE
+        @TableName NVARCHAR(128) = 'Common.OperationEquipmentAssignment',
+        @StepStart DATETIME, @StepEnd DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT, @DupCount INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE Common.OperationEquipmentAssignment;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated OperationEquipmentAssignment');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.Common.OperationEquipmentAssignment src
+        WHERE src.AssignmentID IS NULL
+           OR src.CargoOpID     IS NULL
+           OR src.EquipmentID   IS NULL
+		   OR src.StartTime IS NULL OR src.StartTime=''
+		   OR src.EndTime IS NULL OR src.EndTime='';
+        IF @NullCount > 0 THROW 51000,'NULLs in OperationEquipmentAssignment',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (
+          SELECT AssignmentID 
+          FROM TradePortDB.Common.OperationEquipmentAssignment
+          GROUP BY AssignmentID
+          HAVING COUNT(*)>1
+        ) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in OperationEquipmentAssignment',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO Common.OperationEquipmentAssignment
+          (AssignmentID,CargoOpID,EquipmentID,EmployeeID,StartTime,EndTime)
+        SELECT AssignmentID,CargoOpID,EquipmentID,EmployeeID,StartTime,EndTime
+        FROM TradePortDB.Common.OperationEquipmentAssignment;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+--------------------------------------------------------------------------------
+-- LoadContainer
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadContainer
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.Container',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- Truncate target
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Container;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+            VALUES(@TableName,'Truncate',@StepStart,@StepEnd,'Truncated Container');
+
+        -- Validate NULLs
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.Container src
+        WHERE src.ContainerID     IS NULL
+           OR src.ContainerNumber IS NULL
+           OR src.ContainerTypeID IS NULL
+		   OR src.OwnerCompany IS NULL OR src.OwnerCompany='';
+        IF @NullCount > 0
+            THROW 51000, 'NULLs in Container', 1;
+
+        -- Validate duplicates
+        SELECT @DupCount = COUNT(*) 
+        FROM (
+          SELECT ContainerID 
+          FROM TradePortDB.PortOperations.Container
+          GROUP BY ContainerID
+          HAVING COUNT(*) > 1
+        ) d;
+        IF @DupCount > 0
+            THROW 51001, 'Duplicates in Container', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        -- Insert data
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Container(ContainerID,ContainerNumber,ContainerTypeID,OwnerCompany)
+        SELECT ContainerID,ContainerNumber,ContainerTypeID,OwnerCompany
+        FROM TradePortDB.PortOperations.Container;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadEquipment
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadEquipment
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.Equipment',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Equipment;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated Equipment');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.Equipment src
+        WHERE src.EquipmentID     IS NULL
+           OR src.EquipmentTypeID IS NULL
+		   OR src.Model IS NULL OR src.Model='';
+        IF @NullCount > 0 THROW 51000,'NULLs in Equipment',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT EquipmentID FROM TradePortDB.PortOperations.Equipment GROUP BY EquipmentID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in Equipment',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Equipment(EquipmentID,EquipmentTypeID,Model)
+        SELECT EquipmentID,EquipmentTypeID,Model
+        FROM TradePortDB.PortOperations.Equipment;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadVoyage
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadVoyage
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.Voyage',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Voyage;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated Voyage');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.Voyage src
+        WHERE src.VoyageID      IS NULL
+           OR src.ShipID        IS NULL
+           OR src.VoyageNumber  IS NULL;
+        IF @NullCount > 0 THROW 51000,'NULLs in Voyage',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT VoyageID FROM TradePortDB.PortOperations.Voyage GROUP BY VoyageID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in Voyage',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Voyage(VoyageID,ShipID,VoyageNumber,DeparturePortID,ArrivalPortID)
+        SELECT VoyageID,ShipID,VoyageNumber,DeparturePortID,ArrivalPortID
+        FROM TradePortDB.PortOperations.Voyage;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadPortCall
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadPortCall
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.PortCall',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.PortCall;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated PortCall');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.PortCall src
+        WHERE src.PortCallID      IS NULL
+           OR src.VoyageID        IS NULL
+           OR src.PortID          IS NULL
+           OR src.ArrivalDateTime IS NULL;
+        IF @NullCount > 0 THROW 51000,'NULLs in PortCall',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT PortCallID FROM TradePortDB.PortOperations.PortCall GROUP BY PortCallID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in PortCall',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.PortCall
+          (PortCallID,VoyageID,PortID,ArrivalDateTime,DepartureDateTime,Status)
+        SELECT PortCallID,VoyageID,PortID,ArrivalDateTime,DepartureDateTime,Status
+        FROM TradePortDB.PortOperations.PortCall;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadBerth
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadBerth
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.Berth',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Berth;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated Berth');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.Berth src
+        WHERE src.BerthID    IS NULL
+           OR src.PortID     IS NULL
+           OR src.Name       IS NULL OR src.Name='';
+        IF @NullCount > 0 THROW 51000,'NULLs in Berth',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT BerthID FROM TradePortDB.PortOperations.Berth GROUP BY BerthID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in Berth',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Berth(BerthID,PortID,Name,LengthMeters)
+        SELECT BerthID,PortID,Name,LengthMeters
+        FROM TradePortDB.PortOperations.Berth;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadBerthAllocation
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadBerthAllocation
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.BerthAllocation',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.BerthAllocation;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated BerthAllocation');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.BerthAllocation src
+        WHERE src.AllocationID IS NULL
+           OR src.PortCallID    IS NULL
+           OR src.BerthID       IS NULL;
+        IF @NullCount > 0 THROW 51000,'NULLs in BerthAllocation',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT AllocationID FROM TradePortDB.PortOperations.BerthAllocation GROUP BY AllocationID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in BerthAllocation',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.BerthAllocation
+          (AllocationID,PortCallID,BerthID,AllocationStart,AllocationEnd,AssignedBy)
+        SELECT AllocationID,PortCallID,BerthID,AllocationStart,AllocationEnd,AssignedBy
+        FROM TradePortDB.PortOperations.BerthAllocation;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadYard
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadYard
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.Yard',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.Yard;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated Yard');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.Yard src
+        WHERE src.YardID   IS NULL
+           OR src.PortID   IS NULL
+           OR src.Name     IS NULL OR src.Name='';
+        IF @NullCount > 0 THROW 51000,'NULLs in Yard',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT YardID FROM TradePortDB.PortOperations.Yard GROUP BY YardID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in Yard',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.Yard(YardID,PortID,Name,UsageType)
+        SELECT YardID,PortID,Name,UsageType
+        FROM TradePortDB.PortOperations.Yard;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadYardSlot
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE PortOperations.LoadYardSlot
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'PortOperations.YardSlot',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        SET @StepStart = GETDATE();
+        TRUNCATE TABLE PortOperations.YardSlot;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Truncate',@StepStart,@StepEnd,'Truncated YardSlot');
+
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM TradePortDB.PortOperations.YardSlot src
+        WHERE src.YardSlotID IS NULL
+           OR src.YardID     IS NULL
+		   OR src.Block		IS NULL OR src.Block = '';
+        IF @NullCount > 0 THROW 51000,'NULLs in YardSlot',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (SELECT YardSlotID FROM TradePortDB.PortOperations.YardSlot GROUP BY YardSlotID HAVING COUNT(*)>1) d;
+        IF @DupCount > 0 THROW 51001,'Duplicates in YardSlot',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Validate',@StepStart,@StepEnd, CONCAT('Null=',@NullCount,',Dup=',@DupCount));
+
+        SET @StepStart = GETDATE();
+        INSERT INTO PortOperations.YardSlot(YardSlotID,YardID,Block,RowNumber,TierLevel)
+        SELECT YardSlotID,YardID,Block,RowNumber,TierLevel
+        FROM TradePortDB.PortOperations.YardSlot;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Insert',@StepStart,@StepEnd, CONCAT('Inserted ',@@ROWCOUNT,' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog VALUES
+          (@TableName,'Error',@StepStart,@StepEnd,@Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+--------------------------------------------------------------------------------
+-- LoadCountry
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Common.LoadCountry
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'Common.Country',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: DELETE TARGET (به جای TRUNCATE)
+        SET @StepStart = GETDATE();
+        DELETE FROM Common.Country;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Delete', @StepStart, @StepEnd, 'Deleted all rows from Country');
+
+        -- STEP 2: VALIDATE SOURCE NULLS
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM TradePortDB.Common.Country AS src
+        WHERE src.CountryID   IS NULL
+           OR src.CountryName IS NULL OR src.CountryName='';
+        IF @NullCount > 0
+            THROW 51000, 'Validation failed: NULLs in Country', 1;
+
+        -- STEP 3: VALIDATE DUPLICATES
+        SELECT @DupCount = COUNT(*)
+        FROM (
+            SELECT CountryID
+            FROM TradePortDB.Common.Country
+            GROUP BY CountryID
+            HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 51001, 'Validation failed: Duplicates in Country', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Validate', @StepStart, @StepEnd,
+             CONCAT('Null=', @NullCount, ', Dup=', @DupCount));
+
+        -- STEP 4: INSERT DATA
+        SET @StepStart = GETDATE();
+        INSERT INTO Common.Country
+            (CountryID, CountryName, CountryCode)
+        SELECT
+            CountryID, CountryName, CountryCode
+        FROM TradePortDB.Common.Country;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Insert', @StepStart, @StepEnd,
+             CONCAT('Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Error', @StepStart, @StepEnd, @Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- LoadEmployee
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE HumanResources.LoadEmployee
+AS
+BEGIN
+    DECLARE
+        @TableName  NVARCHAR(128) = 'HumanResources.Employee',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT;
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -- STEP 1: DELETE TARGET (به جای TRUNCATE)
+        SET @StepStart = GETDATE();
+        DELETE FROM HumanResources.Employee;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Delete', @StepStart, @StepEnd, 'Deleted all rows from Employee');
+
+        -- STEP 2: VALIDATE SOURCE NULLS
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM TradePortDB.HumanResources.Employee AS src
+        WHERE src.EmployeeID IS NULL
+           OR src.FullName   IS NULL OR src.FullName='';
+        IF @NullCount > 0
+            THROW 51000, 'Validation failed: NULLs in Employee', 1;
+
+        -- STEP 3: VALIDATE DUPLICATES
+        SELECT @DupCount = COUNT(*)
+        FROM (
+            SELECT EmployeeID
+            FROM TradePortDB.HumanResources.Employee
+            GROUP BY EmployeeID
+            HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 51001, 'Validation failed: Duplicates in Employee', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Validate', @StepStart, @StepEnd,
+             CONCAT('Null=', @NullCount, ', Dup=', @DupCount));
+
+        -- STEP 4: INSERT DATA
+        SET @StepStart = GETDATE();
+        INSERT INTO HumanResources.Employee
+            (EmployeeID, FullName, Position, NationalID, HireDate,
+             BirthDate, Gender, MaritalStatus, Address, Phone, Email, EmploymentStatus)
+        SELECT
+            EmployeeID, FullName, Position, NationalID, HireDate,
+            BirthDate, Gender, MaritalStatus, Address, Phone, Email, EmploymentStatus
+        FROM TradePortDB.HumanResources.Employee;
+        SET @StepEnd = GETDATE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Insert', @StepStart, @StepEnd,
+             CONCAT('Inserted ', @@ROWCOUNT, ' rows'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO PortOperations.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Error', @StepStart, @StepEnd, @Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+
+--SELECT 
+--  'Source'   = COUNT(*)
+--FROM TradePortDB.PortOperations.Port
+
+--SELECT
+--  'Staging'  = COUNT(*)
+--FROM StagingDB.PortOperations.Port;
+
+--SELECT * 
+--FROM PortOperations.ETLLog 
+--WHERE OperationType = 'Error';
+
+
+--USE StagingDB;
+--GO
+
+--SELECT 
+--    LogID,
+--    TableName,
+--    OperationType,
+--    StartTime,
+--    EndTime,
+--    Message
+--FROM PortOperations.ETLLog
+--ORDER BY LogID DESC;
+
