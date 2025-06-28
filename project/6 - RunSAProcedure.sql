@@ -105,3 +105,61 @@ GO
 
 
 exec HumanResources.LoadSAAllHumanResources;
+
+USE StagingDB;
+GO
+
+
+
+CREATE OR ALTER PROCEDURE dbo.LoadAllPortOperationsStagingTables
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -------------------------------------------------------
+    -- 1) (Parent dimensions)
+    -------------------------------------------------------
+    EXEC Common.LoadCountry;                       
+    EXEC HumanResources.LoadEmployee;              
+
+    -------------------------------------------------------
+    -- 2) PortOperations 
+    -------------------------------------------------------
+
+    EXEC PortOperations.LoadContainerType;      
+    EXEC PortOperations.LoadEquipmentType;       
+
+    -------------------------------------------------------
+    -- 3) (Child dimensions)
+    -------------------------------------------------------
+    EXEC PortOperations.LoadContainer;            
+    EXEC PortOperations.LoadEquipment;            
+
+    -------------------------------------------------------
+    -- 4) 
+    -------------------------------------------------------
+    EXEC PortOperations.LoadPort;                 
+    EXEC PortOperations.LoadShip;                
+    EXEC PortOperations.LoadVoyage;               
+    EXEC PortOperations.LoadPortCall;              
+    EXEC PortOperations.LoadBerth;                
+    EXEC PortOperations.LoadBerthAllocation;     
+    EXEC PortOperations.LoadYard;                 
+    EXEC PortOperations.LoadYardSlot;             
+
+    -------------------------------------------------------
+    -- 5)  (Fact tables)
+    -------------------------------------------------------
+    EXEC PortOperations.LoadContainerYardMovement; 
+    EXEC PortOperations.LoadCargoOperation;        
+
+    -------------------------------------------------------
+    -- 6) Factless fact
+    -------------------------------------------------------
+    EXEC Common.LoadOperationEquipmentAssignment;  
+
+END;
+GO
+
+EXEC dbo.LoadAllPortOperationsStagingTables;
+
