@@ -113,7 +113,7 @@ SELECT TOP 100 *
 FROM DataWarehouse.Fact.FactCustomerContractActivationFactless;
 
 
--- ��� ݘʝ��
+-- ÝÞØ Ý˜ÊåÇ
 SELECT
     t.name   AS FactTable,
     SUM(p.rows) AS [RowCount]
@@ -173,3 +173,84 @@ END;
 GO
 
 exec Fact.UpdateAllFacts;
+
+
+
+--------------------------------------------------------------------------------
+-- Wrapper: ExecuteAllFactUpdates
+--   Executes each incremental/aggregate fact‐load procedure in order, with logging
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Fact.ExeAllFactUpdates
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+
+    DECLARE
+        @StepStart   DATETIME,
+        @StepEnd     DATETIME,
+        @TableName   NVARCHAR(128),
+        @Message     NVARCHAR(2000);
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- 1) Cargo operations (transactional fact)
+        ------------------------------------------------------------------------
+        SET @TableName = 'Fact.FactCargoOperationTransactional';
+        SET @StepStart = GETDATE();
+            EXEC Fact.UpdateFactCargoOperationIncremental;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'Executed UpdateFactCargoOperationIncremental');
+
+        ------------------------------------------------------------------------
+        -- 2) Equipment assignments (factless)
+        ------------------------------------------------------------------------
+        SET @TableName = 'Fact.FactEquipmentAssignment';
+        SET @StepStart = GETDATE();
+            EXEC Fact.UpdateFactEquipmentAssignmentIncremental;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'Executed UpdateFactEquipmentAssignmentIncremental');
+
+        ------------------------------------------------------------------------
+        -- 3) Container movements (Accumulating)
+        ------------------------------------------------------------------------
+        SET @TableName = 'Fact.FactContainerMovementsAcc';
+        SET @StepStart = GETDATE();
+            EXEC Fact.UpdateFactContainerMovementsAcc;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'Executed UpdateFactContainerMovementsAcc');
+
+        ------------------------------------------------------------------------
+        -- 4) Port‐call snapshots (periodic snapshot)
+        ------------------------------------------------------------------------
+        SET @TableName = 'Fact.FactPortCallPeriodicSnapshot';
+        SET @StepStart = GETDATE();
+            EXEC Fact.UpdateFactPortCallSnapshotIncremental;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'Executed UpdateFactPortCallSnapshotIncremental');
+
+        COMMIT;
+    END TRY
+
+    BEGIN CATCH
+        IF XACT_STATE() <> 0
+            ROLLBACK;
+
+        SET @StepEnd = GETDATE();
+        SET @Message = CONCAT('ExecuteAllFactUpdates failed: ', ERROR_MESSAGE());
+        INSERT INTO dbo.ETLLog (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES ('ALL_FACT_UPDATES', 'Error', @StepStart, @StepEnd, @Message);
+        THROW;
+    END CATCH;
+END;
+GO
+
+-- To run all fact updates:
+EXEC Fact.ExeAllFactUpdates;
+GO
