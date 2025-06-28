@@ -382,20 +382,20 @@ CREATE TABLE Common.OperationEquipmentAssignment (
 --------------------------------------------------------------------------------
 -- 3) HumanResources.Employee
 --------------------------------------------------------------------------------
-CREATE TABLE HumanResources.Employee (
-    EmployeeID       INT           NOT NULL,
-    FullName         NVARCHAR(100) NOT NULL,
-    Position         NVARCHAR(50)  NULL,
-    NationalID       NVARCHAR(20)  NULL,
-    HireDate         DATE          NULL,
-    BirthDate        DATE          NULL,
-    Gender           NVARCHAR(10)  NULL,
-    MaritalStatus    NVARCHAR(20)  NULL,
-    Address          NVARCHAR(200) NULL,
-    Phone            NVARCHAR(20)  NULL,
-    Email            NVARCHAR(100) NULL,
-    EmploymentStatus NVARCHAR(20)  NULL
-);
+--CREATE TABLE HumanResources.Employee (
+--    EmployeeID       INT           NOT NULL,
+--    FullName         NVARCHAR(100) NOT NULL,
+--    Position         NVARCHAR(50)  NULL,
+--    NationalID       NVARCHAR(20)  NULL,
+--    HireDate         DATE          NULL,
+--    BirthDate        DATE          NULL,
+--    Gender           NVARCHAR(10)  NULL,
+--    MaritalStatus    NVARCHAR(20)  NULL,
+--    Address          NVARCHAR(200) NULL,
+--    Phone            NVARCHAR(20)  NULL,
+--    Email            NVARCHAR(100) NULL,
+--    EmploymentStatus NVARCHAR(20)  NULL
+--);
 --------------------------------------------------------------------------------
 -- 4) PortOperations.ContainerType
 --------------------------------------------------------------------------------
