@@ -30,10 +30,10 @@ CREATE TABLE Dim.DimDate (
     [Year]        SMALLINT        NOT NULL,
     [Quarter]     TINYINT         NOT NULL,
     [Month]       TINYINT         NOT NULL,
-    MonthName     NVARCHAR(50),                 -- نام ماه
+    MonthName     NVARCHAR(50),               
     [Day]         TINYINT         NOT NULL,
-    DayOfWeek     TINYINT         NOT NULL,    -- 1 = Monday
-    DayName       NVARCHAR(50),                 -- نام روز هفته
+    DayOfWeek     TINYINT         NOT NULL,   
+    DayName       NVARCHAR(50),               
     WeekOfYear    TINYINT         NOT NULL,
     IsWeekend     BIT             NOT NULL
 );
@@ -42,47 +42,47 @@ GO
 /*-------------- 1-2  DimCustomer  (SCD2) --------------*/
 CREATE TABLE Dim.DimCustomer (
     DimCustomerID INT IDENTITY(1,1) PRIMARY KEY,
-    CustomerCode  VARCHAR(50)      NOT NULL,    -- کد یکتا مشتری
-    CustomerName  NVARCHAR(200)    NOT NULL,    -- نام مشتری
-    CustomerType  NVARCHAR(100)    NOT NULL,    -- نوع مشتری
-    CountryName   NVARCHAR(200),                  -- نام کشور
-    VATNumber     VARCHAR(50),                    -- شماره VAT (به «شماره مالیات بر ارزش افزوده» (Value-Added Tax Number) مشتری اشاره دارد.)
-    Address       NVARCHAR(500),                  -- آدرس
-    Email         NVARCHAR(200),                  -- ایمیل
-    Phone         VARCHAR(50),                    -- تلفن
+    CustomerCode  VARCHAR(50)      NOT NULL,   
+    CustomerName  NVARCHAR(200)    NOT NULL,    
+    CustomerType  NVARCHAR(100)    NOT NULL,   
+    CountryName   NVARCHAR(200),                  
+    VATNumber     VARCHAR(50),                    
+    Address       NVARCHAR(500),                  
+    Email         NVARCHAR(200),                 
+    Phone         VARCHAR(50),                    
 
     -- SCD2 tracking
-    StartDate     DATE             NOT NULL,    -- شروع دوره جاری
-    EndDate       DATE,                           -- پایان دوره قبلی
-    IsCurrent     BIT              NOT NULL DEFAULT 1  -- ۱=جاری، ۰=قدیمی
+    StartDate     DATE             NOT NULL,    
+    EndDate       DATE,                           
+    IsCurrent     BIT              NOT NULL DEFAULT 1  
 );
 GO
 
 /*-------------- 1-3  DimServiceType (SCD1) --------------*/
 CREATE TABLE Dim.DimServiceType (
     DimServiceTypeID    INT IDENTITY(1,1) PRIMARY KEY,
-    SourceServiceTypeID INT             NOT NULL,     -- کلید طبیعی
-    ServiceName         NVARCHAR(200)   NOT NULL,     -- نام خدمت
-    ServiceCategory     NVARCHAR(100),                  -- دسته‌بندی خدمت
-    UnitOfMeasure       NVARCHAR(50)    NOT NULL,     -- واحد اندازه‌گیری
-    Taxable             BIT             NOT NULL,     -- مشمول مالیات
-    IsActive            BIT             NOT NULL      -- فعال/غیرفعال
+    SourceServiceTypeID INT             NOT NULL,     
+    ServiceName         NVARCHAR(200)   NOT NULL,     
+    ServiceCategory     NVARCHAR(100),                  
+    UnitOfMeasure       NVARCHAR(50)    NOT NULL,     
+    Taxable             BIT             NOT NULL,     
+    IsActive            BIT             NOT NULL      
 );
 GO
 
 /*-------------- 1-4  DimTax  (SCD2) --------------*/
 CREATE TABLE Dim.DimTax (
     DimTaxID      INT IDENTITY(1,1) PRIMARY KEY,
-    TaxName       NVARCHAR(100)   NOT NULL,           -- نام مالیات
-    TaxRate       DECIMAL(18,4)   NOT NULL,           -- نرخ مالیات
-    TaxType       NVARCHAR(100)   NOT NULL,           -- نوع مالیات
-    EffectiveFrom DATE            NOT NULL,           -- از تاریخ
-    EffectiveTo   DATE,                              -- تا تاریخ
+    TaxName       NVARCHAR(100)   NOT NULL,          
+    TaxRate       DECIMAL(18,4)   NOT NULL,          
+    TaxType       NVARCHAR(100)   NOT NULL,          
+    EffectiveFrom DATE            NOT NULL,           
+    EffectiveTo   DATE,                             
 
     -- SCD2 tracking
-    StartDate     DATE            NOT NULL,           -- شروع دوره جاری
-    EndDate       DATE,                              -- پایان دوره قبلی
-    IsCurrent     BIT             NOT NULL DEFAULT 1  -- ۱=جاری، ۰=قدیمی
+    StartDate     DATE            NOT NULL,           
+    EndDate       DATE,                              
+    IsCurrent     BIT             NOT NULL DEFAULT 1  
 );
 GO
 
@@ -598,3 +598,209 @@ END
 GO
 
 PRINT 'Data Warehouse creation script completed successfully.';
+
+
+
+
+
+1. Dimensions
+
+-- 1.1 Date Dimension
+-- CREATE TABLE Dim.DimDate (
+--     DimDateID      INT IDENTITY(1,1) PRIMARY KEY,
+--     FullDate       DATE       NOT NULL,
+--     [Year]         SMALLINT   NOT NULL,
+--     [Quarter]      TINYINT    NOT NULL,
+--     [Month]        TINYINT    NOT NULL,
+--     MonthName      NVARCHAR(20) NULL,
+--     [Day]          TINYINT    NOT NULL,
+--     DayOfWeek      TINYINT    NOT NULL,
+--     DayName        NVARCHAR(20) NULL,
+--     WeekOfYear     TINYINT    NOT NULL,
+--     IsWeekend      BIT        NOT NULL
+-- );
+
+-- 1.2 Ship Dimension (SCD Type 2)
+CREATE TABLE Dim.DimShip (
+    ShipSK         INT IDENTITY(1,1) PRIMARY KEY,
+    ShipID         INT        NOT NULL,
+    IMO_Number     VARCHAR(20) NOT NULL,
+    Name           NVARCHAR(100) NOT NULL,
+    CountryID      INT        NULL,
+    EffectiveFrom  DATE       NOT NULL,
+    EffectiveTo    DATE       NULL,
+    IsCurrent      BIT        NOT NULL DEFAULT(1)
+);
+
+-- 1.3 Port Dimension (SCD Type 1)
+CREATE TABLE Dim.DimPort (
+    PortSK         INT IDENTITY(1,1) PRIMARY KEY,
+    PortID         INT        NOT NULL,
+    Name           NVARCHAR(100) NOT NULL,
+    Location       NVARCHAR(200) NULL
+);
+
+-- 1.4 Container Dimension (SCD Type 3)
+CREATE TABLE Dim.DimContainer (
+    ContainerSK        INT IDENTITY(1,1) PRIMARY KEY,
+    ContainerID        INT NOT NULL UNIQUE,
+    ContainerNumber    NVARCHAR(50) NOT NULL,
+    ContainerTypeID    INT NOT NULL,
+    
+    Original_OwnerCompany NVARCHAR(100),
+    EffectiveDate         DATE,
+    Current_OwnerCompany  NVARCHAR(100)
+);
+
+
+-- 1.5 Equipment Dimension (SCD Type 1)
+CREATE TABLE Dim.DimEquipment (
+    EquipmentSK    INT IDENTITY(1,1) PRIMARY KEY,
+    EquipmentID    INT       NOT NULL,
+    EquipmentTypeID INT      NOT NULL,
+    Model          NVARCHAR(50) NULL,
+    IsActive       BIT       NOT NULL DEFAULT(1)
+);
+
+-- 1.6 Employee Dimension (SCD Type 2)
+CREATE TABLE Dim.DimEmployee (
+    EmployeeSK     INT IDENTITY(1,1) PRIMARY KEY,
+    EmployeeID     INT       NOT NULL,
+    FullName       NVARCHAR(100) NOT NULL,
+    Position       NVARCHAR(50) NULL,
+    NationalID     VARCHAR(20) NULL,
+    HireDate       DATE      NULL,
+    BirthDate      DATE      NULL,
+    Gender         NVARCHAR(10) NULL,
+    MaritalStatus  NVARCHAR(20) NULL,
+    Address        NVARCHAR(200) NULL,
+    Phone          VARCHAR(20) NULL,
+    Email          NVARCHAR(100) NULL,
+    EmploymentStatus NVARCHAR(20) NOT NULL,
+    EffectiveFrom  DATE      NOT NULL,
+    EffectiveTo    DATE      NULL,
+    IsCurrent      BIT       NOT NULL DEFAULT(1)
+);
+
+-- 1.7 YardSlot Dimension (SCD Type 1)
+CREATE TABLE Dim.DimYardSlot (
+    YardSlotSK     INT IDENTITY(1,1) PRIMARY KEY,
+    YardSlotID     INT       NOT NULL,
+    YardID         INT       NOT NULL,
+    [Block]        VARCHAR(10) NULL,
+    RowNumber      INT       NULL,
+    TierLevel      INT       NULL
+);
+
+
+-- 2. Fact Tables
+
+-- 2.1 Transactional Fact: Cargo Operation
+CREATE TABLE Fact.FactCargoOperationTransactional(
+    CargoOpSK         INT IDENTITY(1,1) PRIMARY KEY,
+    DateKey           INT       NOT NULL,
+	FullDate		DATE NOT NULL,
+    ShipSK            INT       NOT NULL,
+    PortSK            INT       NOT NULL,
+    ContainerSK       INT       NOT NULL,
+    EquipmentSK       INT       NOT NULL,
+    EmployeeSK        INT       NOT NULL,
+    OperationType     NVARCHAR(20) NOT NULL,
+    Quantity          INT       NULL,
+    WeightKG          DECIMAL(10,2) NULL,
+    OperationDateTime DATETIME NOT NULL,
+    FOREIGN KEY(DateKey)       REFERENCES dim.DimDate(DimDateID),
+    FOREIGN KEY(ShipSK)        REFERENCES dim.DimShip(ShipSK),
+    FOREIGN KEY(PortSK)        REFERENCES dim.DimPort(PortSK),
+    FOREIGN KEY(ContainerSK)   REFERENCES dim.DimContainer(ContainerSK),
+    FOREIGN KEY(EquipmentSK)   REFERENCES dim.DimEquipment(EquipmentSK),
+    FOREIGN KEY(EmployeeSK)    REFERENCES dim.DimEmployee(EmployeeSK)
+);
+
+
+
+-- 2.2 Periodic Snapshot Fact: Port Call Snapshot
+CREATE TABLE Fact.FactPortCallPeriodicSnapshot (
+    SnapshotSK      INT IDENTITY(1,1) PRIMARY KEY,
+    DateKey         INT NOT NULL,
+	FullDate		DATE NOT NULL,
+    PortCallID      INT NOT NULL,
+    VoyageID        INT NOT NULL,
+    PortSK          INT NOT NULL,
+    BerthID         INT NOT NULL,  
+    Status          NVARCHAR(20) NOT NULL,
+    AllocationCount INT,
+    TotalOps        INT,
+    FOREIGN KEY(DateKey) REFERENCES Dim.DimDate(DimDateID),
+    FOREIGN KEY(PortSK)  REFERENCES Dim.DimPort(PortSK)
+);
+
+
+
+-- 2.3 Acc Fact: Container Movements
+CREATE TABLE Fact.FactContainerMovementsAcc(
+    AggregateSK     INT IDENTITY(1,1) PRIMARY KEY,
+    PortSK          INT       NOT NULL,
+    ContainerTypeID INT       NOT NULL,
+    TotalLoads      INT       NULL,
+    TotalUnloads    INT       NULL,
+    TotalTEU        INT       NULL,
+    FOREIGN KEY(PortSK) REFERENCES Dim.DimPort(PortSK)
+);
+
+-- 2.4 Factless Fact: Equipment Assignment
+CREATE TABLE Fact.FactEquipmentAssignment (
+    AssignmentSK    INT IDENTITY(1,1) PRIMARY KEY,
+    DateKey         INT       NOT NULL,
+    EquipmentSK     INT       NOT NULL,
+    EmployeeSK      INT       NOT NULL,
+    PortSK          INT       NOT NULL,
+    ContainerTypeID INT       NOT NULL,
+    FOREIGN KEY(DateKey) REFERENCES Dim.DimDate(DimDateID),
+    FOREIGN KEY(EquipmentSK) REFERENCES Dim.DimEquipment(EquipmentSK),
+    FOREIGN KEY(EmployeeSK) REFERENCES Dim.DimEmployee(EmployeeSK),
+    FOREIGN KEY(PortSK) REFERENCES Dim.DimPort(PortSK)
+);
+Go
+
+
+
+-- DW
+-- CREATE TABLE ETLLog (
+--     [LogID]         INT IDENTITY(1,1) PRIMARY KEY,  -- کلید لاگ
+--     [TableName]     NVARCHAR(128)     NOT NULL,     -- نام جدول هدف
+--     [OperationType] NVARCHAR(50)      NOT NULL,     -- 'Truncate'/'Validate'/'Insert'/'Error'
+--     [StartTime]     DATETIME          NOT NULL DEFAULT GETDATE(),  -- زمان شروع
+--     [EndTime]       DATETIME,                       -- زمان پایان
+--     [Message]       NVARCHAR(2000)                  -- پیام وضعیت یا خطا
+-- );
+-- GO
+
+
+
+CREATE NONCLUSTERED INDEX IX_DimDate_FullDate ON Dim.DimDate(FullDate);
+
+CREATE NONCLUSTERED INDEX IX_DimShip_ShipID ON Dim.DimShip(ShipID) INCLUDE(Name, IMO_Number);
+
+CREATE NONCLUSTERED INDEX IX_DimPort_PortID ON Dim.DimPort(PortID);
+
+CREATE NONCLUSTERED INDEX IX_DimContainer_ContainerID ON Dim.DimContainer(ContainerID);
+
+CREATE NONCLUSTERED INDEX IX_DimEquipment_EquipmentID ON Dim.DimEquipment(EquipmentID);
+
+CREATE NONCLUSTERED INDEX IX_DimEmployee_EmployeeID ON Dim.DimEmployee(EmployeeID);
+
+CREATE NONCLUSTERED INDEX IX_DimYardSlot_YardSlotID ON Dim.DimYardSlot(YardSlotID);
+
+CREATE NONCLUSTERED INDEX IX_FactCargoOp_DateKey ON Fact.FactCargoOperationTransactional(DateKey);
+CREATE NONCLUSTERED INDEX IX_FactCargoOp_ShipSK ON Fact.FactCargoOperationTransactional(ShipSK);
+CREATE NONCLUSTERED INDEX IX_FactCargoOp_ContainerSK ON Fact.FactCargoOperationTransactional(ContainerSK);
+
+CREATE NONCLUSTERED INDEX IX_PortCallSnap_DateKey ON Fact.FactPortCallPeriodicSnapshot(DateKey);
+CREATE NONCLUSTERED INDEX IX_PortCallSnap_PortSK ON Fact.FactPortCallPeriodicSnapshot(PortSK);
+
+CREATE NONCLUSTERED INDEX IX_ContainerMovAcc_PortSK ON Fact.FactContainerMovementsAcc(PortSK);
+
+CREATE NONCLUSTERED INDEX IX_EquipAssign_DateKey ON Fact.FactEquipmentAssignment(DateKey);
+CREATE NONCLUSTERED INDEX IX_EquipAssign_EmployeeSK ON Fact.FactEquipmentAssignment(EmployeeSK);
+
