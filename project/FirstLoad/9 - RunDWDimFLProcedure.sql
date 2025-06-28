@@ -142,3 +142,99 @@ END;
 GO
 
 EXEC Dim.LoadAllDimensions;
+
+
+
+USE DataWarehouse;
+GO
+
+--------------------------------------------------------------------------------
+-- Wrapper: LoadAllPortOpsDimInitialLoads
+--   Simply invokes each Dim.Load…InitialLoad proc in sequence
+--   (no FK-disable/enable because we use DELETE+RESEED in each proc)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadAllPortOpsDimInitialLoads
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE 
+        @TableName NVARCHAR(128),
+        @StepStart DATETIME,
+        @StepEnd   DATETIME;
+
+    BEGIN TRY
+        BEGIN TRAN;
+		DELETE FROM Fact.FactEquipmentAssignment;
+		DELETE FROM Fact.FactCargoOperationTransactional;
+		DELETE FROM Fact.FactContainerMovementsAcc;
+		DELETE FROM Fact.FactPortCallPeriodicSnapshot;
+
+        -------------------------------------------------
+        -- -- 1) Date
+        -- SET @TableName = 'Dim.DimDate';
+        -- SET @StepStart = GETDATE();
+        -- EXEC Dim.LoadDimDateInitialLoad;
+        -- SET @StepEnd = GETDATE();
+        -- INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        -- VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+        -------------------------------------------------
+        -- 2) Ship (SCD2)
+        SET @TableName = 'Dim.DimShip';
+        SET @StepStart = GETDATE();
+        EXEC Dim.LoadDimShipInitialLoad;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+
+        -------------------------------------------------
+        -- 3) Port (SCD1)
+        SET @TableName = 'Dim.DimPort';
+        SET @StepStart = GETDATE();
+        EXEC Dim.LoadDimPortInitialLoad;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+
+        -------------------------------------------------
+        -- 4) Container (SCD3)
+        SET @TableName = 'Dim.DimContainer';
+        SET @StepStart = GETDATE();
+        EXEC Dim.LoadDimContainerInitialLoad;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+
+        -------------------------------------------------
+        -- 5) Equipment (SCD1)
+        SET @TableName = 'Dim.DimEquipment';
+        SET @StepStart = GETDATE();
+        EXEC Dim.LoadDimEquipmentInitialLoad;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+
+        -------------------------------------------------
+        -- 6) Employee (SCD2)
+        SET @TableName = 'Dim.DimEmployee';
+        SET @StepStart = GETDATE();
+        EXEC Dim.LoadDimEmployeeInitialLoad;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+
+        -------------------------------------------------
+        -- 7) YardSlot (SCD1)
+        SET @TableName = 'Dim.DimYardSlot';
+        SET @StepStart = GETDATE();
+        EXEC Dim.LoadDimYardSlotInitialLoad;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES(@TableName,'Procedure',@StepStart,@StepEnd,'Initial load');
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+EXEC Dim.LoadAllPortOpsDimInitialLoads;
+GO
+
