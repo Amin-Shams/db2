@@ -113,7 +113,7 @@ SELECT TOP 100 *
 FROM DataWarehouse.Fact.FactCustomerContractActivationFactless;
 
 
--- ÝÞØ Ý˜ÊåÇ
+-- 
 SELECT
     t.name   AS FactTable,
     SUM(p.rows) AS [RowCount]
