@@ -133,7 +133,7 @@ ORDER BY
 
 
 --------------------------------------------------------------------------------
--- 6) UpdateAllFacts (Master Procedure for Incremental Load)
+-- UpdateAllFacts (Master Procedure for Incremental Load)
 --------------------------------------------------------------------------------
 CREATE OR ALTER PROCEDURE Fact.UpdateAllFacts
 AS

@@ -858,19 +858,20 @@ BEGIN
             FROM StagingDB.HumanResources.EmploymentHistory
         )
         INSERT INTO Fact.FactEmployeeLifecycle (
-            EmployeeKey, HireDateKey, TerminationDateKey, FirstPromotionDateKey,
+            EmployeeKey, HireDateKey, TerminationDateKey, --FirstPromotionDateKey,
             LastTrainingDateKey, TerminationReasonKey, DaysToTermination,
-            DaysToFirstPromotion, TotalPromotionsCount, TotalTrainingsCompleted, FinalSalary
+            --DaysToFirstPromotion,
+			TotalPromotionsCount, TotalTrainingsCompleted, FinalSalary
         )
         SELECT
             de.EmployeeKey,
             ISNULL(hire_date.DateKey, -1),
             ISNULL(term_date.DateKey, -1),
-            -1, -- Logic for FirstPromotionDateKey is complex and deferred
+            --1, -- Logic for FirstPromotionDateKey is complex and deferred
             ISNULL(last_training_date.DateKey, -1),
             ISNULL(dtr.TerminationReasonKey, -1),
             CASE WHEN term.TerminationDate IS NOT NULL AND fhd.Date IS NOT NULL AND term.TerminationDate > fhd.Date THEN DATEDIFF(DAY, fhd.Date, term.TerminationDate) ELSE NULL END,
-            NULL, -- Logic for DaysToFirstPromotion is complex and deferred
+            --NULL, -- Logic for DaysToFirstPromotion is complex and deferred
             ISNULL(promo.TotalPromotions, 0),
             ISNULL(train.TotalTrainings, 0),
             lks.Salary

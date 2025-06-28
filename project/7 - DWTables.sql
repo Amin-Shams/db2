@@ -522,11 +522,11 @@ CREATE TABLE Fact.FactEmployeeLifecycle (
     EmployeeKey             INT NOT NULL PRIMARY KEY FOREIGN KEY REFERENCES Dim.DimEmployee(EmployeeKey),
     HireDateKey             INT NOT NULL FOREIGN KEY REFERENCES Dim.DimDate(DateKey),
     TerminationDateKey      INT,
-    FirstPromotionDateKey   INT,
+    --FirstPromotionDateKey   INT,
     LastTrainingDateKey     INT,
     TerminationReasonKey    INT,
     DaysToTermination       INT,
-    DaysToFirstPromotion    INT,
+    --DaysToFirstPromotion    INT,
     TotalPromotionsCount    INT,
     TotalTrainingsCompleted INT,
     FinalSalary             DECIMAL(15, 2)
@@ -603,7 +603,7 @@ PRINT 'Data Warehouse creation script completed successfully.';
 
 
 
-1. Dimensions
+--1. Dimensions
 
 -- 1.1 Date Dimension
 -- CREATE TABLE Dim.DimDate (
