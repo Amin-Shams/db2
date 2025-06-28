@@ -906,3 +906,325 @@ BEGIN
 END;
 GO
 
+
+USE DataWarehouse;
+GO
+
+/*------------------------------------------------------------------------------
+  1) UpdateFactCargoOperationIncremental
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE Fact.UpdateFactCargoOperationIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+      @StepStart DATETIME,
+      @StepEnd   DATETIME;
+
+    BEGIN TRY
+      BEGIN TRAN;
+      SET @StepStart = GETDATE();
+
+      INSERT INTO Fact.FactCargoOperationTransactional
+      (
+        DateKey, FullDate, ShipSK, PortSK, ContainerSK,
+        EquipmentSK, EmployeeSK, OperationType,
+        Quantity, WeightKG, OperationDateTime
+      )
+      SELECT
+        dd.DimDateID,
+        CAST(co.OperationDateTime AS DATE),
+        ds.ShipSK,
+        dp.PortSK,
+        dc.ContainerSK,
+        deq.EquipmentSK,
+        COALESCE(dem.EmployeeSK,0),
+        co.OperationType,
+        co.Quantity,
+        co.WeightKG,
+        co.OperationDateTime
+      FROM StagingDB.PortOperations.CargoOperation AS co
+      JOIN StagingDB.PortOperations.PortCall       AS pc  ON co.PortCallID = pc.PortCallID
+      JOIN StagingDB.PortOperations.Voyage         AS v   ON pc.VoyageID   = v.VoyageID
+      JOIN Dim.DimDate                             AS dd  ON CAST(co.OperationDateTime AS DATE) = dd.FullDate
+      JOIN Dim.DimShip                             AS ds  ON v.ShipID = ds.ShipID AND ds.IsCurrent=1
+      JOIN Dim.DimPort                             AS dp  ON pc.PortID = dp.PortID
+      JOIN Dim.DimContainer                        AS dc  ON co.ContainerID = dc.ContainerID
+      INNER JOIN StagingDB.Common.OperationEquipmentAssignment AS oea
+        ON co.CargoOpID = oea.CargoOpID
+      INNER JOIN Dim.DimEquipment                   AS deq
+        ON oea.EquipmentID = deq.EquipmentID
+      LEFT JOIN Dim.DimEmployee                    AS dem
+        ON oea.EmployeeID  = dem.EmployeeID AND dem.IsCurrent=1
+      WHERE NOT EXISTS
+      (
+        SELECT 1
+        FROM Fact.FactCargoOperationTransactional AS f
+        WHERE f.OperationDateTime = co.OperationDateTime
+          AND f.ShipSK      = ds.ShipSK
+          AND f.PortSK      = dp.PortSK
+          AND f.ContainerSK = dc.ContainerSK
+      );
+
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        'Fact.FactCargoOperationTransactional',
+        'IncrementalInsert',
+        @StepStart,
+        @StepEnd,
+        CONCAT('Inserted ', @@ROWCOUNT, ' new cargo‐operations')
+      );
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      IF XACT_STATE()<>0 ROLLBACK;
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        'Fact.FactCargoOperationTransactional',
+        'Error',
+        @StepStart,
+        @StepEnd,
+        ERROR_MESSAGE()
+      );
+      THROW;
+    END CATCH;
+END;
+GO
+
+
+/*------------------------------------------------------------------------------
+  2) UpdateFactEquipmentAssignmentIncremental
+------------------------------------------------------------------------------*/
+
+CREATE OR ALTER PROCEDURE Fact.UpdateFactEquipmentAssignmentIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+
+    DECLARE
+      @TableName NVARCHAR(128) = 'Fact.FactEquipmentAssignment',
+      @StepStart DATETIME,
+      @StepEnd   DATETIME;
+
+    BEGIN TRY
+      BEGIN TRAN;
+      SET @StepStart = GETDATE();
+
+      INSERT INTO Fact.FactEquipmentAssignment
+      (
+        DateKey,
+        EquipmentSK,
+        EmployeeSK,
+        PortSK,
+        ContainerTypeID
+      )
+      SELECT
+        dd.DimDateID,
+        deq.EquipmentSK,
+        dem.EmployeeSK,
+        dp.PortSK,
+        c.ContainerTypeID
+      FROM StagingDB.Common.OperationEquipmentAssignment AS oea
+      JOIN Dim.DimDate                             AS dd  
+        ON CAST(oea.StartTime AS DATE) = dd.FullDate
+      INNER JOIN Dim.DimEquipment                  AS deq 
+        ON oea.EquipmentID = deq.EquipmentID
+      LEFT JOIN Dim.DimEmployee                    AS dem 
+        ON oea.EmployeeID  = dem.EmployeeID 
+       AND dem.IsCurrent = 1
+      JOIN StagingDB.PortOperations.CargoOperation AS co 
+        ON oea.CargoOpID = co.CargoOpID
+      JOIN StagingDB.PortOperations.PortCall       AS pc  
+        ON co.PortCallID = pc.PortCallID
+      JOIN Dim.DimPort                             AS dp  
+        ON pc.PortID = dp.PortID
+      JOIN StagingDB.PortOperations.Container      AS c   
+        ON co.ContainerID = c.ContainerID
+      WHERE NOT EXISTS
+      (
+        SELECT 1
+        FROM Fact.FactEquipmentAssignment AS f
+        WHERE f.DateKey         = dd.DimDateID
+          AND f.EquipmentSK     = deq.EquipmentSK
+          AND f.EmployeeSK      = dem.EmployeeSK
+          AND f.PortSK          = dp.PortSK
+          AND f.ContainerTypeID = c.ContainerTypeID
+      );
+
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        @TableName,
+        'IncrementalInsert',
+        @StepStart,
+        @StepEnd,
+        CONCAT('Inserted ', @@ROWCOUNT, ' new equipment‐assignments')
+      );
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      IF XACT_STATE()<>0 ROLLBACK;
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        @TableName,
+        'Error',
+        @StepStart,
+        @StepEnd,
+        ERROR_MESSAGE()
+      );
+      THROW;
+    END CATCH;
+END;
+GO
+
+
+
+/*------------------------------------------------------------------------------
+  3) UpdateFactContainerMovementsAcc (Aggregate full‐reload)
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE Fact.UpdateFactContainerMovementsAcc
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+      @TableName NVARCHAR(128) = 'Fact.FactContainerMovementsAcc',
+      @StepStart DATETIME,
+      @StepEnd   DATETIME;
+
+    BEGIN TRY
+      BEGIN TRAN;
+      SET @StepStart = GETDATE();
+
+      TRUNCATE TABLE Fact.FactContainerMovementsAcc;
+
+      INSERT INTO Fact.FactContainerMovementsAcc
+      (PortSK, ContainerTypeID, TotalLoads, TotalUnloads, TotalTEU)
+      SELECT
+        dp.PortSK,
+        cty.ContainerTypeID,
+        SUM(CASE WHEN co.OperationType='LOAD'   THEN co.Quantity ELSE 0 END),
+        SUM(CASE WHEN co.OperationType='UNLOAD' THEN co.Quantity ELSE 0 END),
+        SUM(co.Quantity)
+      FROM StagingDB.PortOperations.CargoOperation AS co
+      JOIN StagingDB.PortOperations.PortCall       AS pc  ON co.PortCallID = pc.PortCallID
+      JOIN Dim.DimPort                             AS dp  ON pc.PortID = dp.PortID
+      JOIN StagingDB.PortOperations.Container      AS c   ON co.ContainerID = c.ContainerID
+      JOIN StagingDB.PortOperations.ContainerType  AS cty ON c.ContainerTypeID = cty.ContainerTypeID
+      GROUP BY dp.PortSK, cty.ContainerTypeID;
+
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        @TableName,
+        'Rebuild',
+        @StepStart,
+        @StepEnd,
+        CONCAT('Rebuilt container‐movements aggregate: ', @@ROWCOUNT, ' rows')
+      );
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      IF XACT_STATE()<>0 ROLLBACK;
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        @TableName,
+        'Error',
+        @StepStart,
+        @StepEnd,
+        ERROR_MESSAGE()
+      );
+      THROW;
+    END CATCH;
+END;
+GO
+
+
+/*------------------------------------------------------------------------------
+  4) UpdateFactPortCallSnapshotIncremental
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE Fact.UpdateFactPortCallSnapshotIncremental
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+      @TableName   NVARCHAR(128) = 'Fact.FactPortCallPeriodicSnapshot',
+      @StepStart   DATETIME,
+      @StepEnd     DATETIME;
+
+    BEGIN TRY
+      BEGIN TRAN;
+      -- find last loaded DateKey
+      DECLARE @LastDateKey INT =
+        ISNULL((SELECT MAX(DateKey) FROM Fact.FactPortCallPeriodicSnapshot), 0);
+
+      SET @StepStart = GETDATE();
+
+      INSERT INTO Fact.FactPortCallPeriodicSnapshot
+      (DateKey, PortCallID, VoyageID, PortSK, Status, AllocationCount, TotalOps)
+      SELECT
+        dd.DimDateID,
+        pc.PortCallID,
+        pc.VoyageID,
+        dp.PortSK,
+        pc.Status,
+        COUNT(DISTINCT ba.AllocationID),
+        COUNT(DISTINCT co.CargoOpID)
+      FROM StagingDB.PortOperations.PortCall AS pc
+      JOIN Dim.DimDate                          AS dd  ON CAST(pc.ArrivalDateTime AS DATE)=dd.FullDate
+      JOIN Dim.DimPort                          AS dp  ON pc.PortID = dp.PortID
+      LEFT JOIN StagingDB.PortOperations.BerthAllocation AS ba ON pc.PortCallID = ba.PortCallID
+      LEFT JOIN StagingDB.PortOperations.CargoOperation     AS co ON pc.PortCallID = co.PortCallID
+      WHERE dd.DimDateID > @LastDateKey
+      GROUP BY dd.DimDateID, pc.PortCallID, pc.VoyageID, dp.PortSK, pc.Status;
+
+      SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        @TableName,
+        'IncrementalInsert',
+        @StepStart,
+        @StepEnd,
+        CONCAT('Inserted ', @@ROWCOUNT, ' new port‐call snapshots')
+      );
+
+      COMMIT;
+    END TRY
+    BEGIN CATCH
+      IF XACT_STATE()<>0 ROLLBACK;
+	  SET @StepEnd = GETDATE();
+      INSERT INTO dbo.ETLLog
+      (TableName, OperationType, StartTime, EndTime, Message)
+      VALUES
+      (
+        @TableName,
+        'Error',
+        @StepStart,
+        @StepEnd,
+        ERROR_MESSAGE()
+      );
+      THROW;
+    END CATCH;
+END;
+GO
+
