@@ -339,9 +339,349 @@ CREATE TABLE Audit.ETLLog (
 GO
 
 
+-- 1) Create Staging database if it does not already exist
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = 'StagingDB')
+BEGIN
+    CREATE DATABASE StagingDB;
+END
+GO
+
+-- 2) Switch context to the Staging database
+USE StagingDB;
+GO
+
+-- 3) Create Finance schema if not exists
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'Common')  
+    EXEC('CREATE SCHEMA Common');
+GO
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'HumanResources')
+    EXEC('CREATE SCHEMA HumanResources');
+GO
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'PortOperations')
+    EXEC('CREATE SCHEMA PortOperations');
+GO
+--------------------------------------------------------------------------------
+-- 1) Common.Country
+--------------------------------------------------------------------------------
+CREATE TABLE Common.Country (
+    CountryID    INT          NOT NULL,
+    CountryName  NVARCHAR(100) NOT NULL,
+    CountryCode  VARCHAR(10)   NULL
+);
+--------------------------------------------------------------------------------
+-- 2) Common.OperationEquipmentAssignment
+--------------------------------------------------------------------------------
+CREATE TABLE Common.OperationEquipmentAssignment (
+    AssignmentID INT           NOT NULL,
+    CargoOpID    INT           NOT NULL,
+    EquipmentID  INT           NOT NULL,
+    EmployeeID   INT           NULL,
+    StartTime    DATETIME      NULL,
+    EndTime      DATETIME      NULL,
+);
+--------------------------------------------------------------------------------
+-- 3) HumanResources.Employee
+--------------------------------------------------------------------------------
+CREATE TABLE HumanResources.Employee (
+    EmployeeID       INT           NOT NULL,
+    FullName         NVARCHAR(100) NOT NULL,
+    Position         NVARCHAR(50)  NULL,
+    NationalID       NVARCHAR(20)  NULL,
+    HireDate         DATE          NULL,
+    BirthDate        DATE          NULL,
+    Gender           NVARCHAR(10)  NULL,
+    MaritalStatus    NVARCHAR(20)  NULL,
+    Address          NVARCHAR(200) NULL,
+    Phone            NVARCHAR(20)  NULL,
+    Email            NVARCHAR(100) NULL,
+    EmploymentStatus NVARCHAR(20)  NULL
+);
+--------------------------------------------------------------------------------
+-- 4) PortOperations.ContainerType
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.ContainerType (
+    ContainerTypeID INT           NOT NULL ,
+    Description     NVARCHAR(50)  NOT NULL,
+    MaxWeightKG     FLOAT         NOT NULL
+);
+--------------------------------------------------------------------------------
+-- 5) PortOperations.EquipmentType
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.EquipmentType (
+    EquipmentTypeID INT           NOT NULL ,
+    Description     NVARCHAR(50)  NOT NULL
+);
+--------------------------------------------------------------------------------
+-- 6) PortOperations.Port
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Port (
+    PortID    INT           NOT NULL ,
+    Name      NVARCHAR(100) NOT NULL,
+    Location  NVARCHAR(200) NULL
+);
+--------------------------------------------------------------------------------
+-- 7) PortOperations.Ship
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Ship (
+    ShipID      INT           NOT NULL ,
+    IMO_Number  VARCHAR(20)   NOT NULL,
+    Name        NVARCHAR(100) NOT NULL,
+    CountryID   INT           NULL
+);
+--------------------------------------------------------------------------------
+-- 8) PortOperations.Container
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Container (
+    ContainerID     INT           NOT NULL ,
+    ContainerNumber VARCHAR(20)   NOT NULL,
+    ContainerTypeID INT           NOT NULL,
+    OwnerCompany    NVARCHAR(100) NULL
+);
+--------------------------------------------------------------------------------
+-- 9) PortOperations.Equipment
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Equipment (
+    EquipmentID     INT           NOT NULL ,
+    EquipmentTypeID INT           NOT NULL,
+    Model           NVARCHAR(50)  NULL
+);
+--------------------------------------------------------------------------------
+-- 10) PortOperations.Voyage
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Voyage (
+    VoyageID        INT           NOT NULL ,
+    ShipID          INT           NOT NULL,
+    VoyageNumber    VARCHAR(50)   NOT NULL,
+    DeparturePortID INT           NULL,
+    ArrivalPortID   INT           NULL
+);
+--------------------------------------------------------------------------------
+-- 11) PortOperations.PortCall
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.PortCall (
+    PortCallID        INT           NOT NULL ,
+    VoyageID          INT           NOT NULL,
+    PortID            INT           NOT NULL,
+    ArrivalDateTime   DATETIME      NOT NULL,
+    DepartureDateTime DATETIME      NULL,
+    Status            NVARCHAR(50)  NULL
+);
+--------------------------------------------------------------------------------
+-- 12) PortOperations.Berth
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Berth (
+    BerthID       INT           NOT NULL ,
+    PortID        INT           NOT NULL,
+    Name          NVARCHAR(50)  NOT NULL,
+    LengthMeters  FLOAT         NULL
+);
+--------------------------------------------------------------------------------
+-- 13) PortOperations.BerthAllocation
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.BerthAllocation (
+    AllocationID    INT           NOT NULL ,
+    PortCallID      INT           NOT NULL,
+    BerthID         INT           NOT NULL,
+    AllocationStart DATETIME      NULL,
+    AllocationEnd   DATETIME      NULL,
+    AssignedBy      NVARCHAR(100) NULL
+);
+--------------------------------------------------------------------------------
+-- 14) PortOperations.Yard
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.Yard (
+    YardID    INT           NOT NULL ,
+    PortID    INT           NOT NULL,
+    Name      NVARCHAR(100) NOT NULL,
+    UsageType NVARCHAR(50)  NULL
+);
+--------------------------------------------------------------------------------
+-- 15) PortOperations.YardSlot
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.YardSlot (
+    YardSlotID INT           NOT NULL ,
+    YardID     INT           NOT NULL,
+    Block      VARCHAR(10)   NULL,
+    RowNumber  INT           NULL,
+    TierLevel  INT           NULL
+);
+--------------------------------------------------------------------------------
+-- 16) PortOperations.ContainerYardMovement
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.ContainerYardMovement (
+    MovementID       INT       NOT NULL ,
+    ContainerID      INT       NOT NULL,
+    YardSlotID       INT       NOT NULL,
+    MovementType     NVARCHAR(20) NOT NULL,
+    MovementDateTime DATETIME  NOT NULL
+);
+--------------------------------------------------------------------------------
+-- 17) PortOperations.CargoOperation
+--------------------------------------------------------------------------------
+CREATE TABLE PortOperations.CargoOperation (
+    CargoOpID       INT           NOT NULL ,
+    PortCallID      INT           NOT NULL,
+    ContainerID     INT           NOT NULL,
+    OperationType   NVARCHAR(20)  NOT NULL,
+    OperationDateTime DATETIME     NOT NULL,
+    Quantity        INT           NULL,
+    WeightKG        FLOAT         NULL
+);
+GO
+
+CREATE TABLE PortOperations.ETLLog ( 
+    LogID          INT IDENTITY(1,1) ,
+    TableName      NVARCHAR(128) NOT NULL,
+    OperationType  NVARCHAR(50)  NOT NULL,
+    StartTime      DATETIME      NOT NULL DEFAULT GETDATE(),
+    EndTime        DATETIME      NULL,
+    Message        NVARCHAR(2000) NULL
+);
+
+
 
 USE StagingDB;
 GO
+
+-- ----------------------------------------
+-- Common.OperationEquipmentAssignment
+-- FK: CargoOpID, EquipmentID, EmployeeID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_OEA_CargoOpID
+  ON Common.OperationEquipmentAssignment(CargoOpID);
+GO
+CREATE NONCLUSTERED INDEX IX_OEA_EquipmentID
+  ON Common.OperationEquipmentAssignment(EquipmentID);
+GO
+CREATE NONCLUSTERED INDEX IX_OEA_EmployeeID
+  ON Common.OperationEquipmentAssignment(EmployeeID);
+GO
+
+-- ----------------------------------------
+-- HumanResources.Employee
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Employee_NationalID
+  ON HumanResources.Employee(NationalID);
+GO
+-- ----------------------------------------
+-- PortOperations.Ship
+-- FK: CountryID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Ship_CountryID
+  ON PortOperations.Ship(CountryID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.Container
+-- FK: ContainerTypeID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Container_ContainerTypeID
+  ON PortOperations.Container(ContainerTypeID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.Equipment
+-- FK: EquipmentTypeID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Equipment_EquipmentTypeID
+  ON PortOperations.Equipment(EquipmentTypeID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.Voyage
+-- FK: ShipID, DeparturePortID, ArrivalPortID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Voyage_ShipID
+  ON PortOperations.Voyage(ShipID);
+GO
+CREATE NONCLUSTERED INDEX IX_Voyage_DeparturePortID
+  ON PortOperations.Voyage(DeparturePortID);
+GO
+CREATE NONCLUSTERED INDEX IX_Voyage_ArrivalPortID
+  ON PortOperations.Voyage(ArrivalPortID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.PortCall
+-- FK: VoyageID, PortID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_PortCall_VoyageID
+  ON PortOperations.PortCall(VoyageID);
+GO
+CREATE NONCLUSTERED INDEX IX_PortCall_PortID
+  ON PortOperations.PortCall(PortID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.Berth
+-- FK: PortID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Berth_PortID
+  ON PortOperations.Berth(PortID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.BerthAllocation
+-- FK: PortCallID, BerthID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_BerthAlloc_PortCallID
+  ON PortOperations.BerthAllocation(PortCallID);
+GO
+CREATE NONCLUSTERED INDEX IX_BerthAlloc_BerthID
+  ON PortOperations.BerthAllocation(BerthID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.Yard
+-- FK: PortID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_Yard_PortID
+  ON PortOperations.Yard(PortID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.YardSlot
+-- FK: YardID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_YardSlot_YardID
+  ON PortOperations.YardSlot(YardID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.ContainerYardMovement
+-- FK: ContainerID, YardSlotID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_CYM_ContainerID
+  ON PortOperations.ContainerYardMovement(ContainerID);
+GO
+CREATE NONCLUSTERED INDEX IX_CYM_YardSlotID
+  ON PortOperations.ContainerYardMovement(YardSlotID);
+GO
+
+-- ----------------------------------------
+-- PortOperations.CargoOperation
+-- FK: PortCallID, ContainerID
+-- ----------------------------------------
+CREATE NONCLUSTERED INDEX IX_CO_PortCallID
+  ON PortOperations.CargoOperation(PortCallID);
+GO
+CREATE NONCLUSTERED INDEX IX_CO_ContainerID
+  ON PortOperations.CargoOperation(ContainerID);
+GO
+
+-- ----------------------------------------
+-- ETL Log (Common or PortOperations.ETLLog)
+-- ----------------------------------------
+IF OBJECT_ID('PortOperations.ETLLog','U') IS NOT NULL
+BEGIN
+  CREATE NONCLUSTERED INDEX IX_ETLLog_TableName
+    ON PortOperations.ETLLog(TableName);
+  CREATE NONCLUSTERED INDEX IX_ETLLog_OperationType
+    ON PortOperations.ETLLog(OperationType);
+END
+GO
+
+
 
 -- Indexes for Finance.Customer
 CREATE NONCLUSTERED INDEX IX_Customer_CustomerID ON Finance.Customer(CustomerID);
