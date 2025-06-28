@@ -116,3 +116,76 @@ END;
 GO
 
 exec Fact.LoadAllFacts;
+
+
+USE DataWarehouse;
+GO
+
+--------------------------------------------------------------------------------
+-- Wrapper: LoadAllFactInitialLoad
+--   Invokes each “FirstLoad” fact‐load procedure in sequence,
+--   logging start/end for each.
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Fact.LoadAllFactInitialLoad
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE
+        @TableName NVARCHAR(128),
+        @StepStart DATETIME,
+        @StepEnd   DATETIME;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        -------------------------------------------------
+        -- 1) CargoOperation transactional fact
+        SET @TableName = 'Fact.FactCargoOperationTransactional';
+        SET @StepStart = GETDATE();
+        EXEC Fact.LoadFactCargoOperationInitialLoad;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog
+          (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'FirstLoad via LoadAllFactInitialLoads');
+
+        -------------------------------------------------
+        -- 2) PortCall periodic snapshot fact
+        SET @TableName = 'Fact.FactPortCallPeriodicSnapshot';
+        SET @StepStart = GETDATE();
+        EXEC Fact.LoadFactPortCallSnapshotInitialLoad;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'FirstLoad via LoadAllFactInitialLoads');
+
+        -------------------------------------------------
+        -- 3) Container movements Accumulating fact
+        SET @TableName = 'Fact.FactContainerMovementsAcc';
+        SET @StepStart = GETDATE();
+        EXEC Fact.LoadFactContainerMovementsAccInitialLoad;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'FirstLoad via LoadAllFactInitialLoads');
+
+        -------------------------------------------------
+        -- 4) Equipment assignment factless fact
+        SET @TableName = 'Fact.FactEquipmentAssignment';
+        SET @StepStart = GETDATE();
+        EXEC Fact.LoadFactEquipmentAssignmentInitialLoad;
+        SET @StepEnd   = GETDATE();
+        INSERT INTO dbo.ETLLog VALUES
+          (@TableName, 'Procedure', @StepStart, @StepEnd, 'FirstLoad via LoadAllFactInitialLoads');
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() <> 0
+            ROLLBACK;
+        THROW;
+    END CATCH;
+END;
+GO
+
+-- Execute the wrapper to perform all first‐load fact procedures:
+EXEC Fact.LoadAllFactInitialLoad;
+GO
