@@ -1213,3 +1213,660 @@ BEGIN
 END;
 GO
 
+
+
+USE DataWarehouse;
+GO
+
+--------------------------------------------------------------------------------
+-- 1-1) LoadDimDateInitialLoad
+-- Full initial populate of Dim.DimDate (from 2025-06-22 to today)
+--------------------------------------------------------------------------------
+
+-- CREATE OR ALTER PROCEDURE Dim.LoadDimDateInitialLoad
+-- AS
+-- BEGIN
+--     SET NOCOUNT ON;
+--     DECLARE 
+--         @TableName NVARCHAR(128) = 'Dim.DimDate',
+--         @StepStart DATETIME,
+--         @StepEnd   DATETIME,
+--         @Message   NVARCHAR(2000),
+-- 		@StartDate DATE = '2020-01-01',
+--         @EndDate   DATE = CONVERT(DATE, GETDATE()),
+--         @DayCount  INT;
+
+--     BEGIN TRY
+--         BEGIN TRAN;
+
+--         --------------------------------------------------------------------
+--         -- STEP 1: Delete all existing rows (DELETE + reseed)
+--         --------------------------------------------------------------------
+--         SET @StepStart = GETDATE();
+
+--         DELETE FROM Dim.DimDate;
+--         -- Reset identity so next insert starts at 1
+--         DBCC CHECKIDENT('Dim.DimDate', RESEED, 0);
+
+--         SET @StepEnd = GETDATE();
+--         INSERT INTO dbo.ETLLog(TableName, OperationType, StartTime, EndTime, Message)
+--         VALUES
+--         (
+--             @TableName,
+--             'Delete',
+--             @StepStart,
+--             @StepEnd,
+--             'FirstLoad: Deleted all rows and reseeded DimDate'
+--         );
+
+--         --------------------------------------------------------------------
+--         -- STEP 2: Compute number of days to generate
+--         --------------------------------------------------------------------
+--         SET @DayCount = DATEDIFF(DAY, @StartDate, @EndDate) + 1;
+
+--         --------------------------------------------------------------------
+--         -- STEP 3: Generate and Insert date rows
+--         --------------------------------------------------------------------
+--         SET @StepStart = GETDATE();
+--         SET DATEFIRST 1;  -- ensure Monday = 1
+
+--         ;WITH DateSeq AS
+--         (
+--             SELECT TOP (@DayCount)
+--                 DATEADD(DAY, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1, @StartDate) AS FullDate
+--             FROM sys.all_objects AS s1
+--             CROSS JOIN sys.all_objects AS s2
+--         )
+--         INSERT INTO Dim.DimDate
+--         (
+--             FullDate,
+--             [Year],
+--             [Quarter],
+--             [Month],
+--             MonthName,
+--             [Day],
+--             DayOfWeek,
+--             DayName,
+--             WeekOfYear,
+--             IsWeekend
+--         )
+--         SELECT
+--             FullDate,
+--             YEAR(FullDate),
+--             DATEPART(QUARTER, FullDate),
+--             MONTH(FullDate),
+--             DATENAME(MONTH, FullDate),
+--             DAY(FullDate),
+--             DATEPART(WEEKDAY, FullDate),
+--             DATENAME(WEEKDAY, FullDate),
+--             DATEPART(WEEK, FullDate),
+--             CASE WHEN DATEPART(WEEKDAY, FullDate) IN (6,7) THEN 1 ELSE 0 END
+--         FROM DateSeq
+--         ORDER BY FullDate
+--         OPTION (MAXDOP 1);  -- محدود کردن موازی‌سازی برای ثبات
+
+--         SET @StepEnd = GETDATE();
+--         INSERT INTO dbo.ETLLog(TableName, OperationType, StartTime, EndTime, Message)
+--         VALUES
+--         (
+--             @TableName,
+--             'Insert',
+--             @StepStart,
+--             @StepEnd,
+--             CONCAT('FirstLoad: Inserted ', @@ROWCOUNT, ' rows into Dim.DimDate')
+--         );
+
+--         COMMIT;
+--     END TRY
+--     BEGIN CATCH
+--         IF XACT_STATE() <> 0
+--             ROLLBACK;
+--         SET @StepEnd = GETDATE();
+--         SET @Message = ERROR_MESSAGE();
+--         INSERT INTO dbo.ETLLog(TableName, OperationType, StartTime, EndTime, Message)
+--         VALUES
+--         (
+--             @TableName,
+--             'Error',
+--             @StepStart,
+--             @StepEnd,
+--             CONCAT('FirstLoad: ', @Message)
+--         );
+--         THROW;
+--     END CATCH;
+-- END;
+-- GO
+
+
+USE DataWarehouse;
+GO
+
+--------------------------------------------------------------------------------
+-- 1-2) LoadDimShipInitialLoad
+-- Full initial populate of Dim.DimShip (SCD Type 2)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadDimShipInitialLoad
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE 
+        @TableName NVARCHAR(128) = 'Dim.DimShip',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT,
+        @LoadDate  DATE = CONVERT(DATE, GETDATE());
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- STEP 1: Delete all existing rows + reseed
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Dim.DimShip;
+        DBCC CHECKIDENT('Dim.DimShip', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Deleted all and reseeded DimShip');
+
+        ------------------------------------------------------------------------
+        -- STEP 2: Validate source for NULLs & duplicates on ShipID
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM StagingDB.PortOperations.Ship AS s
+        WHERE s.ShipID     IS NULL
+           OR s.IMO_Number IS NULL
+           OR s.Name       IS NULL;
+        IF @NullCount > 0
+            THROW 60000,'Validation failed: NULLs in StagingDB.PortOperations.Ship',1;
+
+        SELECT @DupCount = COUNT(*) 
+        FROM (
+          SELECT ShipID, COUNT(*) AS Cnt
+          FROM StagingDB.PortOperations.Ship
+          GROUP BY ShipID
+          HAVING COUNT(*)>1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 60001,'Validation failed: Duplicates in StagingDB.PortOperations.Ship',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Validate',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Found ',@NullCount,' NULLs & ',@DupCount,' duplicates'));
+
+        ------------------------------------------------------------------------
+        -- STEP 3: Insert initial SCD2 records from staging
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimShip
+           (ShipID, IMO_Number, Name, CountryID, EffectiveFrom, EffectiveTo, IsCurrent)
+        SELECT
+           s.ShipID,
+           s.IMO_Number,
+           s.Name,
+           s.CountryID,
+           @LoadDate,
+           NULL,
+           1
+        FROM StagingDB.PortOperations.Ship AS s;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Insert',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Inserted ',@@ROWCOUNT,' rows into DimShip'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Error',@StepStart,@StepEnd,CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- 1-3) LoadDimPortInitialLoad
+-- Full initial populate of Dim.DimPort (SCD Type 1)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadDimPortInitialLoad
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE 
+        @TableName NVARCHAR(128) = 'Dim.DimPort',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- STEP 1: Delete all + reseed
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Dim.DimPort;
+        DBCC CHECKIDENT('Dim.DimPort', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Deleted all and reseeded DimPort');
+
+        ------------------------------------------------------------------------
+        -- STEP 2: Validate source for NULLs & duplicates on PortID
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM StagingDB.PortOperations.Port AS p
+        WHERE p.PortID IS NULL
+           OR p.Name   IS NULL;
+        IF @NullCount > 0
+            THROW 60010,'Validation failed: NULLs in StagingDB.PortOperations.Port',1;
+
+        SELECT @DupCount = COUNT(*)
+        FROM (
+          SELECT PortID, COUNT(*) AS Cnt
+          FROM StagingDB.PortOperations.Port
+          GROUP BY PortID
+          HAVING COUNT(*)>1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 60011,'Validation failed: Duplicates in StagingDB.PortOperations.Port',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Validate',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Found ',@NullCount,' NULLs & ',@DupCount,' duplicates'));
+
+        ------------------------------------------------------------------------
+        -- STEP 3: Insert initial SCD1 records from staging
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimPort (PortID, Name, Location)
+        SELECT PortID, Name, Location
+        FROM StagingDB.PortOperations.Port;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Insert',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Inserted ',@@ROWCOUNT,' rows into DimPort'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Error',@StepStart,@StepEnd,CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- 1-4) LoadDimContainerInitialLoad
+-- Full initial populate of Dim.DimContainer (SCD Type 3)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadDimContainerInitialLoad
+AS
+BEGIN
+    SET NOCOUNT, XACT_ABORT ON;
+    DECLARE 
+        @TableName  NVARCHAR(128) = 'Dim.DimContainer',
+        @StepStart  DATETIME,
+        @StepEnd    DATETIME,
+        @Message    NVARCHAR(2000),
+        @NullCount  INT,
+        @DupCount   INT,
+        @LoadDate   DATE        = CONVERT(DATE, GETDATE());
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- STEP 1: Clear existing rows + reseed identity
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Dim.DimContainer;
+        DBCC CHECKIDENT('Dim.DimContainer', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Delete', @StepStart, @StepEnd,
+             'FirstLoad: Cleared DimContainer and reseeded');
+
+        ------------------------------------------------------------------------
+        -- STEP 2: Validate staging for NULLs & duplicates on ContainerID
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM StagingDB.PortOperations.Container AS c
+        WHERE c.ContainerID    IS NULL
+           OR c.ContainerNumber IS NULL;
+        IF @NullCount > 0
+            THROW 60020, 'Validation failed: NULLs in StagingDB.PortOperations.Container', 1;
+
+        SELECT @DupCount = COUNT(*)
+        FROM (
+          SELECT ContainerID, COUNT(*) AS Cnt
+          FROM StagingDB.PortOperations.Container
+          GROUP BY ContainerID
+          HAVING COUNT(*) > 1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 60021, 'Validation failed: Duplicates in StagingDB.PortOperations.Container', 1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Validate', @StepStart, @StepEnd,
+             CONCAT('FirstLoad: Found ', @NullCount, ' NULLs & ', @DupCount, ' duplicates'));
+
+
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimContainer
+            (ContainerID,
+             ContainerNumber,
+             ContainerTypeID,
+             Original_OwnerCompany,
+             EffectiveDate,
+             Current_OwnerCompany)
+        SELECT
+            c.ContainerID,
+            c.ContainerNumber,
+            c.ContainerTypeID,
+            c.OwnerCompany,   
+            @LoadDate,        
+            c.OwnerCompany    
+        FROM StagingDB.PortOperations.Container AS c;
+        SET @StepEnd = GETDATE();
+
+        INSERT INTO dbo.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Insert', @StepStart, @StepEnd,
+             CONCAT('FirstLoad: Inserted ', @@ROWCOUNT, ' rows into DimContainer'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE() <> 0
+            ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog
+            (TableName, OperationType, StartTime, EndTime, Message)
+        VALUES
+            (@TableName, 'Error', @StepStart, @StepEnd,
+             CONCAT('FirstLoad: ', @Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+--------------------------------------------------------------------------------
+-- 1-5) LoadDimEquipmentInitialLoad
+-- Full initial populate of Dim.DimEquipment (SCD Type 1)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadDimEquipmentInitialLoad
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE 
+        @TableName NVARCHAR(128) = 'Dim.DimEquipment',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- STEP 1: Delete all + reseed
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Dim.DimEquipment;
+        DBCC CHECKIDENT('Dim.DimEquipment', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Deleted all and reseeded DimEquipment');
+
+        ------------------------------------------------------------------------
+        -- STEP 2: Validate source for NULLs & duplicates on EquipmentID
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*) 
+        FROM StagingDB.PortOperations.Equipment AS e
+        WHERE e.EquipmentID     IS NULL
+           OR e.EquipmentTypeID IS NULL;
+        IF @NullCount > 0
+            THROW 60030,'Validation failed: NULLs in StagingDB.PortOperations.Equipment',1;
+
+        SELECT @DupCount = COUNT(*)
+        FROM (
+          SELECT EquipmentID, COUNT(*) AS Cnt
+          FROM StagingDB.PortOperations.Equipment
+          GROUP BY EquipmentID
+          HAVING COUNT(*)>1
+        ) AS d;
+        IF @DupCount > 0
+            THROW 60031,'Validation failed: Duplicates in StagingDB.PortOperations.Equipment',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Validate',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Found ',@NullCount,' NULLs & ',@DupCount,' duplicates'));
+
+        ------------------------------------------------------------------------
+        -- STEP 3: Insert initial SCD1 records from staging
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimEquipment
+           (EquipmentID, EquipmentTypeID, Model)
+        SELECT
+           e.EquipmentID,
+           e.EquipmentTypeID,
+           e.Model
+        FROM StagingDB.PortOperations.Equipment AS e;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Insert',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Inserted ',@@ROWCOUNT,' rows into DimEquipment'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Error',@StepStart,@StepEnd,CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- 1-6) LoadDimEmployeeInitialLoad
+-- Full initial populate of Dim.DimEmployee (SCD Type 2)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadDimEmployeeInitialLoad
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE 
+        @TableName NVARCHAR(128) = 'Dim.DimEmployee',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT,
+        @LoadDate  DATE = CONVERT(DATE,GETDATE());
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- STEP 1: Delete all + reseed
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Dim.DimEmployee;
+        DBCC CHECKIDENT('Dim.DimEmployee', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Deleted all and reseeded DimEmployee');
+
+        ------------------------------------------------------------------------
+        -- STEP 2: Validate source for NULLs & duplicates on EmployeeID
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM StagingDB.HumanResources.Employee AS e
+        WHERE e.EmployeeID IS NULL
+           OR e.FullName   IS NULL;
+        IF @NullCount > 0
+            THROW 60040,'Validation failed: NULLs in StagingDB.HumanResources.Employee',1;
+
+        SELECT @DupCount=COUNT(*)
+        FROM (
+          SELECT EmployeeID,COUNT(*) AS Cnt
+          FROM StagingDB.HumanResources.Employee
+          GROUP BY EmployeeID
+          HAVING COUNT(*)>1
+        ) AS d;
+        IF @DupCount>0
+            THROW 60041,'Validation failed: Duplicates in StagingDB.HumanResources.Employee',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Validate',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Found ',@NullCount,' NULLs & ',@DupCount,' duplicates'));
+
+        ------------------------------------------------------------------------
+        -- STEP 3: Insert initial SCD2 records from staging
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimEmployee
+           (EmployeeID, FullName, Position, NationalID, HireDate,
+            BirthDate, Gender, MaritalStatus, Address, Phone, Email,
+            EmploymentStatus, EffectiveFrom, EffectiveTo, IsCurrent)
+        SELECT
+           e.EmployeeID, e.FullName, e.Position, e.NationalID, e.HireDate,
+           e.BirthDate, e.Gender, e.MaritalStatus, e.Address, e.Phone, e.Email,
+           e.EmploymentStatus, @LoadDate, NULL, 1
+        FROM StagingDB.HumanResources.Employee AS e;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Insert',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Inserted ',@@ROWCOUNT,' rows into DimEmployee'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Error',@StepStart,@StepEnd,CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+--------------------------------------------------------------------------------
+-- 1-7) LoadDimYardSlotInitialLoad
+-- Full initial populate of Dim.DimYardSlot (SCD Type 1)
+--------------------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE Dim.LoadDimYardSlotInitialLoad
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE 
+        @TableName NVARCHAR(128) = 'Dim.DimYardSlot',
+        @StepStart DATETIME,
+        @StepEnd   DATETIME,
+        @Message   NVARCHAR(2000),
+        @NullCount INT,
+        @DupCount  INT;
+
+    BEGIN TRY
+        BEGIN TRAN;
+
+        ------------------------------------------------------------------------
+        -- STEP 1: Delete all + reseed
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        DELETE FROM Dim.DimYardSlot;
+        DBCC CHECKIDENT('Dim.DimYardSlot', RESEED, 0);
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Delete',@StepStart,@StepEnd,'FirstLoad: Deleted all and reseeded DimYardSlot');
+
+        ------------------------------------------------------------------------
+        -- STEP 2: Validate source for NULLs & duplicates on YardSlotID
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        SELECT @NullCount = COUNT(*)
+        FROM StagingDB.PortOperations.YardSlot AS ys
+        WHERE ys.YardSlotID IS NULL
+           OR ys.YardID     IS NULL;
+        IF @NullCount > 0
+            THROW 60050,'Validation failed: NULLs in StagingDB.PortOperations.YardSlot',1;
+
+        SELECT @DupCount = COUNT(*)
+        FROM (
+          SELECT YardSlotID,COUNT(*) AS Cnt
+          FROM StagingDB.PortOperations.YardSlot
+          GROUP BY YardSlotID
+          HAVING COUNT(*)>1
+        ) AS d;
+        IF @DupCount>0
+            THROW 60051,'Validation failed: Duplicates in StagingDB.PortOperations.YardSlot',1;
+
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Validate',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Found ',@NullCount,' NULLs & ',@DupCount,' duplicates'));
+
+        ------------------------------------------------------------------------
+        -- STEP 3: Insert initial SCD1 records from staging
+        ------------------------------------------------------------------------
+        SET @StepStart = GETDATE();
+        INSERT INTO Dim.DimYardSlot
+           (YardSlotID, YardID, [Block], RowNumber, TierLevel)
+        SELECT
+           ys.YardSlotID, ys.YardID, ys.Block, ys.RowNumber, ys.TierLevel
+        FROM StagingDB.PortOperations.YardSlot AS ys;
+        SET @StepEnd = GETDATE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Insert',@StepStart,@StepEnd,
+               CONCAT('FirstLoad: Inserted ',@@ROWCOUNT,' rows into DimYardSlot'));
+
+        COMMIT;
+    END TRY
+    BEGIN CATCH
+        IF XACT_STATE()<>0 ROLLBACK;
+        SET @StepEnd = GETDATE();
+        SET @Message = ERROR_MESSAGE();
+        INSERT INTO dbo.ETLLog(TableName,OperationType,StartTime,EndTime,Message)
+        VALUES(@TableName,'Error',@StepStart,@StepEnd,CONCAT('FirstLoad: ',@Message));
+        THROW;
+    END CATCH;
+END;
+GO
+
+
+	
